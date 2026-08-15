@@ -1,0 +1,13 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <image href="rbwc-brand/rbwc-icon-dark-1024.png" width="1024" height="1024" preserveAspectRatio="xMidYMid meet" />
+  <g filter="url(#badgeShadow)">
+    <rect x="682" y="718" width="250" height="174" rx="62" fill="#D9BD79" />
+    <rect x="686" y="722" width="242" height="166" rx="58" stroke="white" stroke-opacity="0.34" stroke-width="8" />
+    <text x="807" y="838" fill="#0A0B0C" font-family="Arial, Helvetica, sans-serif" font-size="62" font-weight="900" letter-spacing="-4" text-anchor="middle">DEMO</text>
+  </g>
+  <defs>
+    <filter id="badgeShadow" x="642" y="678" width="330" height="254" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="18" stdDeviation="20" flood-color="#000000" flood-opacity="0.58" />
+    </filter>
+  </defs>
+</svg>

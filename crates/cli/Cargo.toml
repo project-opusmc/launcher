@@ -1,0 +1,18 @@
+[package]
+name = "rbw-launcher"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "rbw"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+open.workspace = true
+rbw-auth = { path = "../rbw-auth" }
+rbw-platform = { path = "../rbw-platform" }
+rbw-runtime = { path = "../rbw-runtime" }

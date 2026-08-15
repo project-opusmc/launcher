@@ -1,0 +1,44 @@
+[package]
+name = "rbw-desktop"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lib]
+name = "rbw_desktop"
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[features]
+default = []
+# Developer-only launcher simulation. This feature is deliberately non-default
+# and is additionally guarded by `debug_assertions` in the implementation, so
+# it is never registered in a release build.
+developer-test-profile = []
+# QA packages are a stricter flavor of the developer profile: they start in
+# offline mode and compile no account-authentication entrypoints. It is kept
+# separate from the in-memory developer simulation profile so QA can install
+# and launch its own managed Minecraft runtime.
+qa-edition = []
+# Uses the QA/offline runtime surface but resolves a third, isolated data root.
+# This feature exists only for the temporary in-game UI migration preview.
+ui-preview = ["qa-edition", "rbw-runtime/ui-preview-artifact"]
+
+[[bin]]
+name = "rbw-desktop"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build.workspace = true
+
+[dependencies]
+open.workspace = true
+rbw-auth = { path = "../../launcher/rbw-auth" }
+rbw-platform = { path = "../../launcher/rbw-platform" }
+rbw-runtime = { path = "../../launcher/rbw-runtime" }
+serde.workspace = true
+serde_json.workspace = true
+tauri.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

@@ -1,0 +1,38 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "RBW Client Demo",
+  "identifier": "dev.rbw.client.ui-preview",
+  "build": {
+    "beforeDevCommand": "bash ../scripts/start-desktop-dev.sh",
+    "beforeBuildCommand": "bash ../scripts/build-desktop-qa-frontend.sh"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "RBW Client Demo",
+        "width": 1220,
+        "height": 760,
+        "minWidth": 980,
+        "minHeight": 650,
+        "resizable": true,
+        "center": true
+      }
+    ]
+  },
+  "bundle": {
+    "category": "DeveloperTool",
+    "resources": {
+      "resources/bootstrap": "bootstrap",
+      "resources/brand": "brand",
+      "resources/RBW Client.app": "RBW Client.app"
+    },
+    "icon": [
+      "icons/qa/32x32.png",
+      "icons/qa/128x128.png",
+      "icons/qa/128x128@2x.png",
+      "icons/qa/icon.icns",
+      "icons/qa/icon.ico"
+    ]
+  }
+}

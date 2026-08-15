@@ -1,0 +1,48 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "RBW Client",
+  "version": "0.0.1",
+  "identifier": "dev.rbw.client",
+  "build": {
+    "beforeDevCommand": "npm run desktop:dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run desktop:build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "RBW Client",
+        "width": 1220,
+        "height": 760,
+        "minWidth": 980,
+        "minHeight": 650,
+        "resizable": true,
+        "center": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost ws://localhost:1420; img-src 'self' asset: http://asset.localhost; style-src 'self' 'unsafe-inline'; script-src 'self'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "resources": {
+      "resources/bootstrap": "bootstrap",
+      "resources/brand": "brand",
+      "resources/RBW Client.app": "RBW Client.app"
+    },
+    "macOS": {
+      "minimumSystemVersion": "11.0"
+    }
+  }
+}

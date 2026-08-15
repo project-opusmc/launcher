@@ -1,0 +1,29 @@
+[package]
+name = "rbw-runtime"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[features]
+# This exists only for the debug-only, isolated RBW Client Demo UI-preview
+# bundle. Production keeps the reviewed release artifact lock below.
+ui-preview-artifact = []
+
+[dependencies]
+fs2.workspace = true
+md5.workspace = true
+rayon.workspace = true
+rbw-platform = { path = "../rbw-platform" }
+regex.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha1.workspace = true
+shlex.workspace = true
+thiserror.workspace = true
+url.workspace = true
+zip.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

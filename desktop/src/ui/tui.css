@@ -1,0 +1,991 @@
+:root {
+  color-scheme: dark;
+  --tui-background: #000000;
+  --tui-surface: #050505;
+  --tui-surface-raised: #0a0a0a;
+  --tui-foreground: #f5f5f5;
+  --tui-muted: #b5b5b5;
+  --tui-quiet: #707070;
+  --tui-border: #262626;
+  --tui-border-strong: #565656;
+  --tui-accent: #55a7ff;
+  --tui-focus: var(--tui-accent);
+  --tui-selection: #0a2035;
+  --tui-success: #f5f5f5;
+  --tui-warning: var(--tui-accent);
+  --tui-error: #f5f5f5;
+  --tui-space-xs: 4px;
+  --tui-space-sm: 8px;
+  --tui-space-md: 12px;
+  --tui-space-lg: 16px;
+  --tui-space-xl: 24px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  margin: 0;
+  background: var(--tui-background);
+}
+
+body {
+  min-width: 980px;
+  min-height: 0;
+  overflow: hidden;
+}
+
+button,
+input,
+select {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
+}
+
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+*::-webkit-scrollbar-track {
+  background: var(--tui-background);
+}
+
+*::-webkit-scrollbar-thumb {
+  border: 2px solid var(--tui-background);
+  background: var(--tui-border-strong);
+}
+
+.tui-app,
+.tui-app * {
+  letter-spacing: 0;
+}
+
+.tui-app {
+  display: grid;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  grid-template-rows: 56px minmax(0, 1fr) 74px 34px;
+  overflow: hidden;
+  color: var(--tui-foreground);
+  background: var(--tui-background);
+  font-family: "SFMono-Regular", "Cascadia Code", "Roboto Mono", Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.tui-header {
+  display: flex;
+  min-height: 56px;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--tui-space-lg);
+  padding: 0 var(--tui-space-lg);
+  border-bottom: 1px solid var(--tui-border-strong);
+  background: var(--tui-surface);
+}
+
+.tui-header-brand,
+.tui-header-meta {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: var(--tui-space-sm);
+}
+
+.tui-header-brand strong {
+  color: var(--tui-foreground);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.tui-brand-mark {
+  display: inline-grid;
+  width: 32px;
+  height: 24px;
+  place-items: center;
+  border: 1px solid var(--tui-border-strong);
+  color: var(--tui-foreground);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.tui-header-state {
+  padding-left: var(--tui-space-sm);
+  border-left: 1px solid var(--tui-border);
+}
+
+.tui-header-meta {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  color: var(--tui-muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.tui-header-meta button {
+  max-width: 220px;
+  overflow: hidden;
+  border: 0;
+  padding: 0;
+  color: var(--tui-foreground);
+  background: transparent;
+  font: inherit;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tui-header-meta button:hover,
+.tui-header-meta button:focus-visible {
+  color: var(--tui-accent);
+  text-decoration: underline;
+}
+
+.tui-toast-stack {
+  position: fixed;
+  z-index: 30;
+  top: 68px;
+  right: var(--tui-space-lg);
+  display: grid;
+  width: min(680px, calc(100vw - 32px));
+  gap: var(--tui-space-sm);
+  pointer-events: none;
+}
+
+.tui-message {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--tui-space-md);
+  padding: var(--tui-space-sm) var(--tui-space-md);
+  border: 1px solid var(--tui-border-strong);
+  background: var(--tui-surface);
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.72);
+  pointer-events: auto;
+  animation: tui-toast-in 180ms ease-out both;
+}
+
+.tui-message strong {
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.tui-message span {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--tui-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tui-message--error {
+  border-color: var(--tui-foreground);
+}
+
+.tui-message--error strong {
+  padding: 1px 5px;
+  color: var(--tui-background);
+  background: var(--tui-foreground);
+}
+
+.tui-message--notice strong {
+  color: var(--tui-accent);
+}
+
+.tui-message button {
+  border: 1px solid var(--tui-border);
+  padding: 3px 7px;
+  color: var(--tui-muted);
+  background: transparent;
+  font: inherit;
+  font-size: 10px;
+}
+
+.tui-message button:hover,
+.tui-message button:focus-visible {
+  border-color: var(--tui-focus);
+  color: var(--tui-foreground);
+}
+
+.tui-screen-region {
+  min-height: 0;
+  overflow: hidden;
+  padding: var(--tui-space-lg);
+}
+
+.tui-home-grid,
+.tui-page-grid {
+  display: grid;
+  min-height: 0;
+  height: 100%;
+  grid-template-columns: minmax(260px, 0.37fr) minmax(0, 0.63fr);
+  grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 1px;
+  border: 1px solid var(--tui-border-strong);
+  background: var(--tui-border-strong);
+}
+
+.tui-page-grid {
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.tui-pane {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid transparent;
+  outline: none;
+  background: var(--tui-surface);
+}
+
+.tui-pane.is-focused,
+.tui-pane:focus,
+.tui-pane:focus-within {
+  border-color: var(--tui-focus);
+  background: var(--tui-surface-raised);
+}
+
+.tui-pane-header {
+  display: flex;
+  min-height: 34px;
+  align-items: center;
+  gap: var(--tui-space-sm);
+  padding: 0 var(--tui-space-md);
+  border-bottom: 1px solid var(--tui-border);
+  color: var(--tui-muted);
+}
+
+.tui-pane-header h2 {
+  margin: 0;
+  color: var(--tui-foreground);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.tui-pane-rule {
+  width: 12px;
+  height: 1px;
+  flex: 0 0 auto;
+  background: var(--tui-border-strong);
+}
+
+.tui-pane-rule--right {
+  width: auto;
+  flex: 1 1 auto;
+}
+
+.tui-pane-content {
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow: auto;
+  padding: var(--tui-space-md);
+}
+
+.tui-pane-footer {
+  min-height: 28px;
+  padding: 6px var(--tui-space-md);
+  border-top: 1px solid var(--tui-border);
+  color: var(--tui-quiet);
+  font-size: 10px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tui-menu-list {
+  display: grid;
+  gap: 1px;
+}
+
+.tui-play-pane .tui-pane-content {
+  padding-top: var(--tui-space-sm);
+  padding-bottom: var(--tui-space-sm);
+}
+
+.tui-play-pane .tui-menu-item {
+  min-height: 25px;
+}
+
+.tui-menu-item {
+  display: grid;
+  min-height: 28px;
+  grid-template-columns: 14px 30px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid transparent;
+  padding: 0 7px 0 4px;
+  color: var(--tui-muted);
+  background: transparent;
+  font: inherit;
+  text-align: left;
+}
+
+.tui-menu-item:hover,
+.tui-menu-item.is-selected {
+  border-color: var(--tui-border);
+  color: var(--tui-foreground);
+  background: var(--tui-selection);
+}
+
+.tui-menu-item:disabled {
+  color: var(--tui-quiet);
+  cursor: not-allowed;
+}
+
+.tui-menu-item kbd {
+  color: var(--tui-quiet);
+  font: inherit;
+  font-size: 10px;
+}
+
+.tui-menu-caret {
+  color: var(--tui-accent);
+  font-weight: 700;
+}
+
+.tui-menu-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tui-menu-key-spacer {
+  display: block;
+  width: 30px;
+}
+
+.tui-status {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--tui-foreground);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tui-status--muted,
+.tui-status--normal {
+  color: var(--tui-muted);
+}
+
+.tui-status--success {
+  color: var(--tui-success);
+}
+
+.tui-status--warning {
+  color: var(--tui-warning);
+}
+
+.tui-status--error {
+  color: var(--tui-error);
+}
+
+.tui-key-value-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+}
+
+.tui-key-value-row {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(110px, 0.9fr) minmax(0, 1.1fr);
+  align-items: baseline;
+  gap: var(--tui-space-md);
+}
+
+.tui-key-value-row dt {
+  overflow: hidden;
+  color: var(--tui-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tui-key-value-row dd {
+  min-width: 0;
+  margin: 0;
+  text-align: right;
+}
+
+.tui-detail-copy {
+  display: grid;
+  gap: 8px;
+  margin-top: var(--tui-space-xl);
+  border-top: 1px solid var(--tui-border);
+  padding-top: var(--tui-space-md);
+  color: var(--tui-muted);
+}
+
+.tui-detail-copy p,
+.tui-setting-editor p,
+.tui-module-detail > p {
+  margin: 0;
+}
+
+.tui-command-bar {
+  display: flex;
+  min-height: 34px;
+  align-items: center;
+  gap: var(--tui-space-lg);
+  overflow: hidden;
+  border-top: 1px solid var(--tui-border-strong);
+  padding: 0 var(--tui-space-lg);
+  color: var(--tui-muted);
+  background: var(--tui-surface);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.tui-command {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.tui-command kbd {
+  border: 1px solid var(--tui-border);
+  padding: 1px 4px;
+  color: var(--tui-foreground);
+  background: var(--tui-surface-raised);
+  font: inherit;
+  font-size: 10px;
+}
+
+.tui-action-stack,
+.tui-form-stack,
+.tui-setting-editor {
+  display: grid;
+  gap: var(--tui-space-md);
+}
+
+.tui-action-button {
+  min-height: 32px;
+  border: 1px solid var(--tui-border-strong);
+  padding: 0 var(--tui-space-md);
+  color: var(--tui-foreground);
+  background: transparent;
+  font: inherit;
+  font-size: 10px;
+  text-align: left;
+}
+
+.tui-action-button:hover,
+.tui-action-button:focus-visible {
+  border-color: var(--tui-focus);
+  background: var(--tui-selection);
+}
+
+.tui-action-button.is-primary {
+  border-color: var(--tui-focus);
+  color: var(--tui-background);
+  background: var(--tui-focus);
+}
+
+.tui-action-button.is-primary:hover,
+.tui-action-button.is-primary:focus-visible {
+  background: #8bc2ff;
+}
+
+.tui-action-button.is-danger {
+  border-color: var(--tui-foreground);
+  color: var(--tui-foreground);
+}
+
+.tui-action-button:disabled {
+  border-color: var(--tui-border);
+  color: var(--tui-quiet);
+  background: transparent;
+}
+
+.tui-form-stack label,
+.tui-setting-editor label,
+.tui-form-grid label {
+  display: grid;
+  gap: 5px;
+  color: var(--tui-muted);
+  font-size: 10px;
+}
+
+.tui-form-stack input,
+.tui-setting-editor input[type="text"],
+.tui-form-grid input,
+.tui-form-grid select,
+.tui-setting-editor select {
+  width: 100%;
+  min-height: 32px;
+  border: 1px solid var(--tui-border-strong);
+  border-radius: 0;
+  padding: 0 8px;
+  color: var(--tui-foreground);
+  background: var(--tui-background);
+  font: inherit;
+  font-size: 11px;
+}
+
+.tui-form-stack input:focus,
+.tui-setting-editor input:focus,
+.tui-form-grid input:focus,
+.tui-form-grid select:focus,
+.tui-setting-editor select:focus {
+  border-color: var(--tui-focus);
+  outline: none;
+}
+
+.tui-help {
+  margin: -6px 0 0;
+  color: var(--tui-quiet);
+  font-size: 10px;
+}
+
+.tui-help.is-valid {
+  color: var(--tui-success);
+}
+
+.tui-module-detail {
+  display: grid;
+  gap: var(--tui-space-md);
+}
+
+.tui-detail-heading {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: var(--tui-space-md);
+  border-bottom: 1px solid var(--tui-border);
+  padding-bottom: var(--tui-space-md);
+}
+
+.tui-detail-heading span {
+  color: var(--tui-quiet);
+  font-size: 10px;
+}
+
+.tui-detail-heading h3 {
+  margin: 2px 0 0;
+  color: var(--tui-foreground);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.tui-toggle-button {
+  min-width: 48px;
+  min-height: 28px;
+  border: 1px solid var(--tui-border-strong);
+  color: var(--tui-muted);
+  background: transparent;
+  font: inherit;
+  font-size: 10px;
+}
+
+.tui-toggle-button.is-on {
+  border-color: var(--tui-success);
+  color: var(--tui-success);
+}
+
+.tui-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--tui-space-md);
+}
+
+.tui-form-grid output,
+.tui-setting-editor output {
+  color: var(--tui-foreground);
+  font-size: 12px;
+}
+
+.tui-setting-editor code,
+.tui-pane-footer,
+.tui-log-view {
+  overflow: auto;
+  color: var(--tui-muted);
+  font-family: inherit;
+  font-size: 11px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.tui-range-labels {
+  display: flex;
+  justify-content: space-between;
+  color: var(--tui-quiet);
+  font-size: 10px;
+}
+
+.tui-setting-editor input[type="range"],
+.tui-form-grid input[type="range"] {
+  width: 100%;
+  accent-color: var(--tui-focus);
+}
+
+.tui-checkbox-row {
+  display: flex !important;
+  grid-template-columns: none !important;
+  align-items: center;
+  gap: var(--tui-space-sm) !important;
+}
+
+.tui-checkbox-row input {
+  width: 14px;
+  height: 14px;
+  accent-color: var(--tui-focus);
+}
+
+.tui-pane-actions {
+  display: flex;
+  margin-top: var(--tui-space-lg);
+  border-top: 1px solid var(--tui-border);
+  padding-top: var(--tui-space-md);
+}
+
+.tui-pane-actions--stacked {
+  display: grid;
+  gap: var(--tui-space-sm);
+}
+
+.tui-account-list {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.tui-account-row {
+  display: grid;
+  width: 100%;
+  min-width: 0;
+  min-height: 34px;
+  grid-template-columns: 14px auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--tui-space-sm);
+  border: 1px solid transparent;
+  padding: 0 var(--tui-space-sm) 0 4px;
+  color: var(--tui-muted);
+  background: transparent;
+  font: inherit;
+  text-align: left;
+}
+
+.tui-account-row:hover,
+.tui-account-row:focus-visible,
+.tui-account-row.is-selected {
+  border-color: var(--tui-focus);
+  color: var(--tui-foreground);
+  background: var(--tui-selection);
+  outline: none;
+}
+
+.tui-account-name {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--tui-foreground);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tui-account-badge {
+  color: var(--tui-muted);
+  font-size: 10px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.tui-account-badge.is-premium,
+.tui-account-badge.is-official {
+  color: var(--tui-accent);
+}
+
+.tui-account-badge.is-demo {
+  color: var(--tui-foreground);
+}
+
+.tui-account-manager {
+  display: grid;
+  gap: var(--tui-space-md);
+  margin-top: var(--tui-space-lg);
+  border-top: 1px solid var(--tui-border);
+  padding-top: var(--tui-space-md);
+}
+
+.tui-empty-state {
+  margin: 0;
+  padding: var(--tui-space-lg) var(--tui-space-sm);
+  color: var(--tui-quiet);
+  text-align: center;
+}
+
+.tui-launch-dock {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(280px, 1fr) 150px minmax(240px, 0.55fr);
+  align-items: stretch;
+  gap: 1px;
+  border-top: 1px solid var(--tui-border-strong);
+  border-bottom: 1px solid var(--tui-border-strong);
+  background: var(--tui-border-strong);
+}
+
+.tui-launch-identity,
+.tui-launch-summary,
+.tui-launch-button {
+  min-width: 0;
+  border: 0;
+  border-radius: 0;
+  background: var(--tui-surface);
+}
+
+.tui-launch-identity {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--tui-space-md);
+  padding: 0 var(--tui-space-lg);
+  color: var(--tui-foreground);
+  font: inherit;
+  text-align: left;
+}
+
+.tui-launch-identity strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tui-launch-identity:hover,
+.tui-launch-identity:focus-visible {
+  color: var(--tui-accent);
+  background: var(--tui-surface-raised);
+  outline: 1px solid var(--tui-focus);
+  outline-offset: -1px;
+}
+
+.tui-launch-summary {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: var(--tui-space-sm);
+  padding: 0 var(--tui-space-md);
+  color: var(--tui-quiet);
+  font-size: 9px;
+}
+
+.tui-launch-summary strong {
+  color: var(--tui-foreground);
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.tui-launch-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--tui-space-md);
+  padding: 0 var(--tui-space-lg);
+  color: var(--tui-background);
+  background: var(--tui-accent);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.tui-launch-button span {
+  font-size: 18px;
+}
+
+.tui-launch-button:hover,
+.tui-launch-button:focus-visible {
+  background: #8bc2ff;
+  outline: 1px solid var(--tui-foreground);
+  outline-offset: -3px;
+}
+
+.tui-launch-button:disabled {
+  color: var(--tui-quiet);
+  background: var(--tui-surface);
+}
+
+.tui-log-view {
+  min-height: 100%;
+  margin: 0;
+  line-height: 1.7;
+}
+
+.tui-progress {
+  position: relative;
+  height: 24px;
+  border: 1px solid var(--tui-border-strong);
+  background: var(--tui-background);
+}
+
+.tui-progress span {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: var(--tui-selection);
+}
+
+.tui-progress strong {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: var(--tui-foreground);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.tui-modal-layer {
+  position: fixed;
+  z-index: 20;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: var(--tui-space-lg);
+  background: rgba(0, 0, 0, 0.88);
+  animation: tui-layer-in 140ms ease-out both;
+}
+
+.tui-modal {
+  width: min(620px, 100%);
+  border: 1px solid var(--tui-focus);
+  background: var(--tui-surface);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.9);
+  animation: tui-modal-in 180ms ease-out both;
+}
+
+.tui-modal header,
+.tui-modal footer {
+  display: flex;
+  min-height: 38px;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--tui-space-md);
+  padding: 0 var(--tui-space-md);
+  border-bottom: 1px solid var(--tui-border);
+  color: var(--tui-foreground);
+  font-size: 10px;
+}
+
+.tui-modal footer {
+  justify-content: space-between;
+  border-top: 1px solid var(--tui-border);
+  border-bottom: 0;
+  color: var(--tui-muted);
+}
+
+.tui-modal .tui-log-view {
+  min-height: 150px;
+  padding: var(--tui-space-md);
+}
+
+.tui-modal .tui-progress {
+  margin: 0 var(--tui-space-md) var(--tui-space-md);
+}
+
+.tui-activity {
+  position: relative;
+  height: 4px;
+  margin: 0 var(--tui-space-md) var(--tui-space-md);
+  overflow: hidden;
+  background: var(--tui-border);
+}
+
+.tui-activity span {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 34%;
+  background: var(--tui-accent);
+  animation: tui-activity 1.05s ease-in-out infinite;
+}
+
+.tui-modal-action {
+  min-height: 26px;
+  border: 1px solid var(--tui-border-strong);
+  padding: 0 var(--tui-space-sm);
+  color: var(--tui-foreground);
+  background: transparent;
+  font: inherit;
+  font-size: 10px;
+}
+
+.tui-modal-action:hover,
+.tui-modal-action:focus-visible {
+  border-color: var(--tui-focus);
+  color: var(--tui-accent);
+}
+
+@keyframes tui-toast-in {
+  from { opacity: 0; transform: translateY(-8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes tui-layer-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes tui-modal-in {
+  from { opacity: 0; transform: translateY(8px) scale(0.985); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes tui-activity {
+  0% { transform: translateX(-105%); }
+  50% { transform: translateX(98%); }
+  100% { transform: translateX(295%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tui-message,
+  .tui-modal-layer,
+  .tui-modal,
+  .tui-activity span {
+    animation-duration: 1ms;
+    animation-iteration-count: 1;
+  }
+}
+
+button:focus-visible,
+input:focus-visible,
+select:focus-visible {
+  outline: 1px solid var(--tui-focus);
+  outline-offset: 2px;
+}
+
+@media (max-width: 1080px) {
+  .tui-screen-region {
+    padding: var(--tui-space-md);
+  }
+
+  .tui-home-grid,
+  .tui-page-grid {
+    grid-template-columns: minmax(220px, 0.4fr) minmax(0, 0.6fr);
+  }
+
+  .tui-header,
+  .tui-command-bar {
+    padding-right: var(--tui-space-md);
+    padding-left: var(--tui-space-md);
+  }
+
+  .tui-command-bar {
+    gap: var(--tui-space-md);
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "name": "rbw-desktop",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1 --port 1420 --strictPort",
+    "build": "tsc -b && vite build",
+    "check": "tsc --noEmit",
+    "desktop:dev": "bash ../scripts/start-desktop-dev.sh",
+    "desktop:build": "bash ../scripts/build-desktop-release.sh",
+    "tauri:dev:qa": "tauri dev --features qa-edition --config src-tauri/tauri.qa.conf.json",
+    "tauri:build:premium": "tauri build --bundles app",
+    "tauri:build:qa": "tauri build --debug --bundles app --runner ../../scripts/tauri-cargo-qa.sh --config src-tauri/tauri.qa.conf.json",
+    "tauri:build:ui-preview": "tauri build --debug --bundles app --runner ../../scripts/tauri-cargo-ui-preview.sh --config src-tauri/tauri.ui-preview.conf.json",
+    "tauri:install:ui-preview": "bash ../scripts/install-rbw-demo.sh",
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.11.1",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.11.4",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.4",
+    "@vitejs/plugin-react": "^6.0.5",
+    "typescript": "^7.0.2",
+    "vite": "^8.2.1"
+  }
+}
