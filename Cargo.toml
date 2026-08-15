@@ -2,10 +2,10 @@
 resolver = "2"
 members = [
     "desktop/src-tauri",
-    "launcher/rbw-launcher",
-    "launcher/rbw-runtime",
-    "launcher/rbw-platform",
-    "launcher/rbw-auth",
+    "crates/auth",
+    "crates/cli",
+    "crates/engine",
+    "crates/platform",
 ]
 
 [workspace.package]

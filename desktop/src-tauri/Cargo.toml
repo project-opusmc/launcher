@@ -33,9 +33,9 @@ tauri-build.workspace = true
 
 [dependencies]
 open.workspace = true
-rbw-auth = { path = "../../launcher/rbw-auth" }
-rbw-platform = { path = "../../launcher/rbw-platform" }
-rbw-runtime = { path = "../../launcher/rbw-runtime" }
+rbw-auth = { path = "../../crates/auth" }
+rbw-platform = { path = "../../crates/platform" }
+rbw-runtime = { path = "../../crates/engine" }
 serde.workspace = true
 serde_json.workspace = true
 tauri.workspace = true

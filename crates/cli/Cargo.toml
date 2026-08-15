@@ -13,6 +13,6 @@ path = "src/main.rs"
 anyhow.workspace = true
 clap.workspace = true
 open.workspace = true
-rbw-auth = { path = "../rbw-auth" }
-rbw-platform = { path = "../rbw-platform" }
-rbw-runtime = { path = "../rbw-runtime" }
+rbw-auth = { path = "../auth" }
+rbw-platform = { path = "../platform" }
+rbw-runtime = { path = "../engine" }

@@ -1,15 +1,24 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-rbw_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-
-"${rbw_root}/game/gradlew" -p "${rbw_root}/game" prepareBootstrap
-
-bootstrap_source="${rbw_root}/game/build/bootstrap"
-bootstrap_destination="${rbw_root}/desktop/src-tauri/resources/bootstrap"
+opus_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+runtime_artifact_dir="${OPUS_RUNTIME_ARTIFACT_DIR:-${opus_root}/runtime-artifacts}"
+bootstrap_destination="${opus_root}/desktop/src-tauri/resources/bootstrap"
 mkdir -p "${bootstrap_destination}"
 find "${bootstrap_destination}" -mindepth 1 -maxdepth 1 -type f -name '*.jar' -delete
-cp "${bootstrap_source}"/*.jar "${bootstrap_destination}/"
+
+for artifact_name in \
+  bootstrap-0.0.1.jar \
+  rbw-forge-coremod-0.0.1.jar \
+  rbw-forge-client-0.0.1-preview.3.jar; do
+  artifact_source="${runtime_artifact_dir}/${artifact_name}"
+  if [[ ! -f "${artifact_source}" ]]; then
+    echo "Missing Runtime artifact: ${artifact_source}" >&2
+    echo "Set OPUS_RUNTIME_ARTIFACT_DIR to a verified Runtime artifact directory." >&2
+    exit 1
+  fi
+  cp "${artifact_source}" "${bootstrap_destination}/${artifact_name}"
+done
 
 verify_artifact() {
   local artifact_path="$1"
@@ -42,7 +51,7 @@ verify_artifact \
   "b5edc2d61edb6d116984859f283407d7940f675e" \
   "255915"
 
-brand_destination="${rbw_root}/desktop/src-tauri/resources/brand"
+brand_destination="${opus_root}/desktop/src-tauri/resources/brand"
 mkdir -p "${brand_destination}"
-cp "${rbw_root}/desktop/public/brand/opus-wordmark-transparent.png" \
+cp "${opus_root}/desktop/public/brand/opus-wordmark-transparent.png" \
   "${brand_destination}/opus-wordmark-transparent.png"

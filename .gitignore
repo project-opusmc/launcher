@@ -6,12 +6,8 @@
 /desktop/src-tauri/resources/bin/rbw-game-runner-*
 /desktop/src-tauri/resources/game-app/Contents/MacOS/Ranked Bedwars Client
 /desktop/src-tauri/resources/bootstrap/*.jar
-/game/.gradle/
-/game/client-mod/.gradle/
-/game/**/build/
-/game/client-mod/preview/*.status.json
-/game/client-mod/run/screenshots/rbw-preview*.png
-/game/client-mod/run/
+!/desktop/src-tauri/resources/bootstrap/.gitkeep
+/runtime-artifacts/
 /.gradle/
 /logs/
 /crash-reports/
