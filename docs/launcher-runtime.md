@@ -1,13 +1,13 @@
 # Launcher runtime: install, verify, launch
 
-Everything in this page lives in `launcher/rbw-runtime`, with path and platform
-support from `launcher/rbw-platform`. The supported launch path is the pinned
+Everything in this page lives in `crates/engine`, with path and platform
+support from `crates/platform`. The supported launch path is the pinned
 Forge + locally imported OptiFine 1.8.9 profile; vanilla is only the verified
 base dependency of that profile, not a selectable product runtime.
 
 ## Pinned constants
 
-`launcher/rbw-runtime/src/lib.rs` holds the values that lock the runtime:
+`crates/engine/src/lib.rs` holds the values that lock the runtime:
 
 | Constant | Value / role |
 | --- | --- |
@@ -24,7 +24,7 @@ following a changed pointer.
 
 ## Data layout
 
-`RbwPaths::from_root` derives everything from one root:
+`OpusPaths::from_root` derives everything from one root:
 
 ```
 <root>/
@@ -39,20 +39,23 @@ following a changed pointer.
 │   ├── indexes/java-runtime-all-v1.json
 │   ├── manifests/<platform>/<component>/<version>.json
 │   └── java/<platform>/<component>/<version>/…
-├── game/                      the isolated Forge game directory (not .minecraft)
+├── game/mods/
+│   └── OptiFine_1.8.9_HD_U_M5.jar           verified local import cache
+├── instances/<minecraft-uuid>/game/          identity-isolated game directory
 │   └── mods/
-│       ├── OptiFine_1.8.9_HD_U_M5.jar       locally imported and verified
-│       └── rbw-forge-coremod.jar             staged and verified at launch
-│       └── rbw-forge-client.jar              staged and verified at launch
+│       ├── OptiFine_1.8.9_HD_U_M5.jar
+│       ├── opus-runtime-legacy-1.8.9.jar
+│       └── opus-client-legacy-1.8.9.jar
 ├── logs/<session-id>/         per-session diagnostics
 └── sessions/<session-id>/     natives, classpath file, filtered log4j
 ```
 
-Roots: `~/.rbw-client` (macOS/Linux) or `%LOCALAPPDATA%/RBWClient` (Windows) for
-Premium; `~/.rbw-client-qa` / `%LOCALAPPDATA%/RBWClientQA` for QA; and
-`~/.rbw-client-ui-preview` / `%LOCALAPPDATA%/RBWClientUiPreview` for the
-temporary UI Preview. `RBW_HOME` overrides Premium only; `RBW_QA_HOME` and
-`RBW_UI_PREVIEW_HOME` override their respective isolated roots and must be
+Roots: `~/.opus-launcher` (macOS/Linux) or `%LOCALAPPDATA%/OpusLauncher`
+(Windows) for Premium; `~/.opus-launcher-qa` /
+`%LOCALAPPDATA%/OpusLauncherQA` for QA; and `~/.opus-launcher-ui-preview` /
+`%LOCALAPPDATA%/OpusLauncherUiPreview` for the
+temporary UI Preview. `OPUS_HOME` overrides Premium only; `OPUS_QA_HOME` and
+`OPUS_UI_PREVIEW_HOME` override their respective isolated roots and must be
 absolute.
 
 Every path built from remote metadata goes through `safe_join`, which rejects
@@ -67,7 +70,7 @@ outside the data root.
 
 - HTTPS only — `validate_url` rejects any other scheme, including for JSON.
 - 15 s connect timeout, 60 s request timeout, at most 5 redirects.
-- User agent `RBW-Client/<crate version>`.
+- User agent `Opus-Launcher/<crate version>`.
 - If the spec declares a size and the response advertises `Content-Length`, a
   mismatch aborts before writing (`RemoteSizeMismatch`).
 - The body is read through `.take(size + 1)`, or 512 MiB when no size is known;
@@ -117,10 +120,11 @@ launcher processes cannot install concurrently.
    profile IDs.
 
 OptiFine is not a network-install step. `import_optifine` accepts only a local
-file that matches the lock's exact size and SHA-1, copies it atomically into
-the isolated `game/mods/` directory, and never changes or removes the source
-file. See [forge-optifine-runtime.md](forge-optifine-runtime.md) for the
-licensing and QA-mod policy.
+file that matches the lock's exact size and SHA-1, copies it atomically into the
+shared local import cache, and never changes or removes the source file. At
+launch it is verified again and staged into the selected identity's isolated
+`instances/<uuid>/game/mods/` directory. The QA policy is documented in
+[qa-offline.md](qa-offline.md).
 
 `java_home` is `<runtime root>/jre.bundle/Contents/Home` on macOS, the runtime
 root itself elsewhere.
@@ -177,19 +181,19 @@ log directories created with mode `0700`; `diagnostics.jsonl` and `gc.log`
 pre-created at `0600` so a permissive umask cannot widen them; a payload-free
 `session-manifest.json` written up front.
 
-**JVM arguments.** macOS adds `-Xdock:name=Ranked Bedwars Client`. Then heap
+**JVM arguments.** macOS adds `-Xdock:name=Opus Client`. Then heap
 bounds, three native library path properties (`java.library.path`,
 `org.lwjgl.librarypath`, `net.java.games.input.librarypath`), the diagnostics
 file property, GC logging with details and date stamps, and an
-`-XX:ErrorFile=…/jvm_crash_%p.log`. Optional `-Drbw.utility.settings.file=` and
-`-Drbw.brand.wordmark.file=` connect the launcher's settings and branding to the
+`-XX:ErrorFile=…/jvm_crash_%p.log`. Optional `-Dopus.utility.settings.file=` and
+`-Dopus.brand.wordmark.file=` connect the launcher's settings and branding to the
 in-game UI.
 
 **Logging config.** `prepare_logging_config` reads Mojang's verified Log4j XML
 and requires exactly one `<filters>` element **and** exactly one occurrence of
 Mojang's `${...}` lookup-deny `RegexFilter`. If that anchor is missing the
 launch fails closed (`UnexpectedLoggingConfiguration`) rather than running
-without the Log4Shell mitigation. RBW then injects a second filter that denies
+without the Log4Shell mitigation. OPUS then injects a second filter that denies
 `Session ID is token:` messages and writes the derived config into the session
 directory.
 
@@ -200,29 +204,28 @@ split with `shlex`; every `${…}` placeholder must resolve, including Forge's
 fails with `UnresolvedPlaceholder`.
 
 **Supported launch mode: `ForgeBootstrap`.** The runtime id must equal the
-locked Forge profile, the managed OptiFine JAR must verify, and both bundled RBW
+locked Forge profile, the managed OptiFine JAR must verify, and both bundled OPUS
 artifacts must be present. The launcher:
 
 - canonicalizes the single `bootstrap-*.jar` and all managed Forge/Minecraft
   classpath entries;
-- starts `dev.rbw.bootstrap.ForgeBootstrapMain` rather than the vanilla main
+- starts `org.polydevs.opusmc.bootstrap.ForgeBootstrapMain` rather than the vanilla main
   class;
 - sends the ordinary game arguments through stdin; and
-- verifies the telemetry-only RBW coremod's checksum and required
-  `FMLCorePlugin` manifest, stages it into `game/mods/rbw-forge-coremod.jar`;
+- verifies the OPUS Runtime coremod checksum and required `FMLCorePlugin`
+  manifest, then stages it as `game/mods/opus-runtime-legacy-1.8.9.jar`;
 - verifies and stages the typed Forge client mod into
-  `game/mods/rbw-forge-client.jar`; and
+  `game/mods/opus-client-legacy-1.8.9.jar`; and
 - rejects an unexpected visible top-level entry in the managed `game/mods/`
   directory.
 
-The telemetry coremod intentionally contains no RBW UI hook, generated screen,
-or UI transformer. The typed Forge client mod is the only product UI route.
+The typed Forge client mod is the product UI route; Launcher treats both OPUS
+Runtime JARs as immutable artifacts and does not compile their source.
 
-The product desktop and CLI paths do not select `Direct` or the former
-standalone `Bootstrap` mode. Those internal legacy variants exist only for
-compatibility/test boundaries; they are not a fallback if the Forge profile or
-OptiFine import is missing. The legacy direct branch also defensively refuses
-authenticated identities.
+The product desktop and CLI paths do not select `Direct` or standalone
+`Bootstrap` mode. Those internal variants exist only for test boundaries; they
+are not a fallback if the Forge profile or OptiFine import is missing. The
+direct branch also defensively refuses authenticated identities.
 
 **Stdin protocol.** `encode_game_arguments` emits big-endian `u32` count, then
 for each argument a big-endian `u32` byte length and its UTF-8 bytes. Limits:
@@ -242,19 +245,21 @@ the session directory, replacing any known access token with `<redacted>` line
 by line.
 
 `launch_game_via_macos_app` — the macOS path. It validates that
-`Ranked Bedwars Client.app/Contents/MacOS/Ranked Bedwars Client` exists, injects
-`-Drbw.game.statusFile=…` *before* `-cp`, writes the stdin payload to a file,
+`Opus Client.app/Contents/MacOS/Opus Client` exists, injects
+`-Dopus.game.statusFile=…` *before* `-cp`, writes the stdin payload to a file,
 and runs:
 
 ```
-/usr/bin/open -W -n --stdin <payload> --stdout <raw> --stderr <raw>
-              --env RBW_GAME_WORKDIR=<game dir>
-              "Ranked Bedwars Client.app" --args <java> <jvm args> <main> <game args>
+/usr/bin/open -n --stdin <payload> --stdout <raw> --stderr <raw>
+              --env OPUS_GAME_WORKDIR=<game dir>
+              "Opus Client.app" --args <java> <jvm args> <main> <game args>
 ```
 
-`open -W` waits for the app to exit. Because `open` does not stream, raw output
-files are redacted into the final `game.stdout.log` / `game.stderr.log`
-afterwards and the raw files (and the stdin payload) are deleted.
+LaunchServices cannot reliably wait for a stub that immediately replaces itself
+with Java, so OPUS does not use `open -W`. It waits on the Runtime status file
+instead. Because `open` does not stream, raw output files are redacted into the
+final `game.stdout.log` / `game.stderr.log` afterwards and the raw files (and
+the stdin payload) are deleted.
 
 Since `open`'s exit status only reports LaunchServices, the real outcome comes
 from the status file the Forge bootstrap writes:
@@ -284,7 +289,7 @@ typed variant, and their messages are deliberately free of tokens and URLs.
 - Changing Forge? Update the checked-in runtime lock and test every new or
   changed resolved artifact. Do not execute an installer or follow mutable
   Forge profile metadata at runtime.
-- Changing OptiFine support? Keep it a local, user-provided import. RBW must
+- Changing OptiFine support? Keep it a local, user-provided import. OPUS must
   not add a download, bundled copy, or redistribution path.
 - Adding a managed mod? Extend the QA allowlist and directory validation for
   every Forge-discoverable location, lock its artifact and ordering, and add a

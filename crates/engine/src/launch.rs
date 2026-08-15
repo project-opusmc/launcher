@@ -4,7 +4,7 @@ use crate::{
     extract_natives, verify_file,
 };
 use md5::{Digest, Md5};
-use rbw_platform::{OperatingSystem, Platform};
+use opus_platform::{OperatingSystem, Platform};
 use serde::Serialize;
 use std::ffi::{OsStr, OsString};
 use std::fs::{self, File, OpenOptions};
@@ -299,7 +299,7 @@ impl LaunchPlan {
             prefixed_path_argument("-Djava.library.path=", &natives_directory),
             prefixed_path_argument("-Dorg.lwjgl.librarypath=", &natives_directory),
             prefixed_path_argument("-Dnet.java.games.input.librarypath=", &natives_directory),
-            prefixed_path_argument("-Drbw.diagnostics.file=", &diagnostics_path),
+            prefixed_path_argument("-Dopus.diagnostics.file=", &diagnostics_path),
             prefixed_path_argument("-Xloggc:", &gc_log_path),
             OsString::from("-XX:+PrintGCDetails"),
             OsString::from("-XX:+PrintGCDateStamps"),
@@ -307,19 +307,19 @@ impl LaunchPlan {
         ]);
         if let Some(utility_settings_file) = &options.utility_settings_file {
             jvm_arguments.push(prefixed_path_argument(
-                "-Drbw.utility.settings.file=",
+                "-Dopus.utility.settings.file=",
                 utility_settings_file,
             ));
         }
         if let Some(brand_wordmark_file) = &options.brand_wordmark_file {
             jvm_arguments.push(prefixed_path_argument(
-                "-Drbw.brand.wordmark.file=",
+                "-Dopus.brand.wordmark.file=",
                 brand_wordmark_file,
             ));
         }
         if let (Some(logging), Some(path)) = (&minecraft.version.logging, &minecraft.logging_config)
         {
-            let filtered_path = session_directory.join("log4j-rbw.xml");
+            let filtered_path = session_directory.join("log4j-opus.xml");
             prepare_logging_config(path, &filtered_path)?;
             jvm_arguments.push(OsString::from(
                 logging
@@ -362,16 +362,16 @@ impl LaunchPlan {
                 let game_classpath_file = session_directory.join("game-classpath.txt");
                 write_classpath_file(&game_classpath_file, &minecraft.classpath)?;
                 let bootstrap_arguments = vec![
-                    OsString::from("--rbw-game-main"),
+                    OsString::from("--opus-game-main"),
                     OsString::from(&minecraft.main_class),
-                    OsString::from("--rbw-game-classpath-file"),
+                    OsString::from("--opus-game-classpath-file"),
                     game_classpath_file.into_os_string(),
-                    OsString::from("--rbw-game-arguments-stdin"),
+                    OsString::from("--opus-game-arguments-stdin"),
                 ];
                 let payload = encode_game_arguments(&vanilla_arguments)?;
                 (
                     absolute_bootstrap_classpath,
-                    "dev.rbw.bootstrap.BootstrapMain".to_owned(),
+                    "org.polydevs.opusmc.bootstrap.BootstrapMain".to_owned(),
                     bootstrap_arguments,
                     Some(payload),
                 )
@@ -415,11 +415,11 @@ impl LaunchPlan {
                 let mut system_classpath = Vec::with_capacity(game_classpath.len() + 1);
                 system_classpath.push(bootstrap);
                 system_classpath.extend(game_classpath);
-                let bootstrap_arguments = vec![OsString::from("--rbw-game-arguments-stdin")];
+                let bootstrap_arguments = vec![OsString::from("--opus-game-arguments-stdin")];
                 let payload = encode_game_arguments(&vanilla_arguments)?;
                 (
                     system_classpath,
-                    "dev.rbw.bootstrap.ForgeBootstrapMain".to_owned(),
+                    "org.polydevs.opusmc.bootstrap.ForgeBootstrapMain".to_owned(),
                     bootstrap_arguments,
                     Some(payload),
                 )
@@ -598,7 +598,7 @@ fn stage_forge_optifine(
     {
         return Ok(destination);
     }
-    let temporary = mods_directory.join(format!(".rbw-optifine.part-{}", std::process::id()));
+    let temporary = mods_directory.join(format!(".opus-optifine.part-{}", std::process::id()));
     if temporary.exists() {
         fs::remove_file(&temporary)?;
     }
@@ -689,8 +689,11 @@ fn validate_forge_coremod(path: &Path, spec: &crate::DownloadSpec) -> Result<(),
         .map_err(|_| LaunchError::InvalidForgeCoremod(path.to_path_buf()))?
         .read_to_string(&mut manifest)
         .map_err(|_| LaunchError::InvalidForgeCoremod(path.to_path_buf()))?;
-    if !manifest_has_attribute(&manifest, "FMLCorePlugin", "dev.rbw.forge.RbwLoadingPlugin")
-        || !manifest_has_attribute(&manifest, "FMLCorePluginContainsFMLMod", "false")
+    if !manifest_has_attribute(
+        &manifest,
+        "FMLCorePlugin",
+        "org.polydevs.opusmc.forge.OpusLoadingPlugin",
+    ) || !manifest_has_attribute(&manifest, "FMLCorePluginContainsFMLMod", "false")
     {
         return Err(LaunchError::InvalidForgeCoremod(path.to_path_buf()));
     }
@@ -750,7 +753,7 @@ fn validate_forge_client_mod(path: &Path, spec: &crate::DownloadSpec) -> Result<
     if manifest_has_key(&manifest, "FMLCorePlugin")
         || manifest_has_key(&manifest, "FMLCorePluginContainsFMLMod")
         || archive
-            .by_name("dev/rbw/client/RbwClientMod.class")
+            .by_name("org/polydevs/opusmc/client/OpusClientMod.class")
             .is_err()
     {
         return Err(LaunchError::InvalidForgeClientMod(path.to_path_buf()));
@@ -761,7 +764,7 @@ fn validate_forge_client_mod(path: &Path, spec: &crate::DownloadSpec) -> Result<
         .map_err(|_| LaunchError::InvalidForgeClientMod(path.to_path_buf()))?
         .read_to_string(&mut metadata)
         .map_err(|_| LaunchError::InvalidForgeClientMod(path.to_path_buf()))?;
-    if !metadata.contains("\"modid\": \"rbwclient\"") {
+    if !metadata.contains("\"modid\": \"opusclient\"") {
         return Err(LaunchError::InvalidForgeClientMod(path.to_path_buf()));
     }
     Ok(())
@@ -885,7 +888,7 @@ pub fn launch_game_via_macos_app(
     let status_path = plan.log_directory.join("game.status");
     insert_jvm_argument_before_classpath(
         &mut plan.jvm_arguments,
-        OsString::from(format!("-Drbw.game.statusFile={}", status_path.display())),
+        OsString::from(format!("-Dopus.game.statusFile={}", status_path.display())),
     );
     create_private_file(&stdout_path, &[])?;
     create_private_file(&stderr_path, &[])?;
@@ -1010,7 +1013,7 @@ fn macos_open_arguments(
     main_class: &str,
     game_arguments: &[OsString],
 ) -> Vec<OsString> {
-    let mut working_directory_environment = OsString::from("RBW_GAME_WORKDIR=");
+    let mut working_directory_environment = OsString::from("OPUS_GAME_WORKDIR=");
     working_directory_environment.push(working_directory);
     let mut arguments = vec![
         OsString::from("-n"),
@@ -1646,7 +1649,7 @@ mod tests {
         fn new() -> Self {
             let temporary = tempfile::tempdir().unwrap();
             let layout = MinecraftLayout::new(
-                rbw_platform::RbwPaths::from_root(temporary.path().join("rbw")).unwrap(),
+                opus_platform::OpusPaths::from_root(temporary.path().join("opus")).unwrap(),
             );
             let bootstrap_jar = temporary.path().join("opus-bootstrap-0.0.1.jar");
             let forge_classpath = temporary.path().join("forge-runtime.jar");
@@ -1669,17 +1672,20 @@ mod tests {
                 &[
                     (
                         "META-INF/MANIFEST.MF",
-                        b"Manifest-Version: 1.0\r\nFMLCorePlugin: dev.rbw.forge.RbwLoadingPlugin\r\nFMLCorePluginContainsFMLMod: false\r\n\r\n",
+                        b"Manifest-Version: 1.0\r\nFMLCorePlugin: org.polydevs.opusmc.forge.OpusLoadingPlugin\r\nFMLCorePluginContainsFMLMod: false\r\n\r\n",
                     ),
-                    ("dev/rbw/forge/RbwLoadingPlugin.class", b"coremod fixture"),
+                    ("org/polydevs/opusmc/forge/OpusLoadingPlugin.class", b"coremod fixture"),
                 ],
             );
             write_zip(
                 &client_mod_jar,
                 &[
                     ("META-INF/MANIFEST.MF", b"Manifest-Version: 1.0\r\n\r\n"),
-                    ("mcmod.info", b"[{\"modid\": \"rbwclient\"}]"),
-                    ("dev/rbw/client/RbwClientMod.class", b"client mod fixture"),
+                    ("mcmod.info", b"[{\"modid\": \"opusclient\"}]"),
+                    (
+                        "org/polydevs/opusmc/client/OpusClientMod.class",
+                        b"client mod fixture",
+                    ),
                 ],
             );
 
@@ -1711,8 +1717,8 @@ mod tests {
                 layout,
                 platform: Platform {
                     os: OperatingSystem::Linux,
-                    host_arch: rbw_platform::Architecture::X86_64,
-                    game_arch: rbw_platform::Architecture::X86_64,
+                    host_arch: opus_platform::Architecture::X86_64,
+                    game_arch: opus_platform::Architecture::X86_64,
                 },
                 minecraft,
                 java: ManagedJava {
@@ -1845,8 +1851,8 @@ mod tests {
             Path::new("/tmp/Opus Client.app"),
             Path::new("/tmp/java"),
             &[OsString::from("-Xmx2G")],
-            "dev.rbw.bootstrap.ForgeBootstrapMain",
-            &[OsString::from("--rbw-game-arguments-stdin")],
+            "org.polydevs.opusmc.bootstrap.ForgeBootstrapMain",
+            &[OsString::from("--opus-game-arguments-stdin")],
         );
 
         assert!(arguments.contains(&OsString::from("-n")));
@@ -1888,13 +1894,13 @@ mod tests {
         ];
         insert_jvm_argument_before_classpath(
             &mut arguments,
-            OsString::from("-Drbw.game.statusFile=/tmp/game.status"),
+            OsString::from("-Dopus.game.statusFile=/tmp/game.status"),
         );
         assert_eq!(
             arguments,
             vec![
                 OsString::from("-Xmx2048M"),
-                OsString::from("-Drbw.game.statusFile=/tmp/game.status"),
+                OsString::from("-Dopus.game.statusFile=/tmp/game.status"),
                 OsString::from("-cp"),
                 OsString::from("game.jar"),
             ]
@@ -1912,8 +1918,8 @@ mod tests {
         };
         let platform = Platform {
             os: OperatingSystem::MacOs,
-            host_arch: rbw_platform::Architecture::Aarch64,
-            game_arch: rbw_platform::Architecture::X86_64,
+            host_arch: opus_platform::Architecture::Aarch64,
+            game_arch: opus_platform::Architecture::X86_64,
         };
         let mode = LaunchMode::Bootstrap {
             classpath: vec![PathBuf::from("/private/bootstrap.jar")],
@@ -1989,7 +1995,7 @@ mod tests {
     fn derived_logging_config_blocks_session_token_messages() {
         let temp = tempfile::tempdir().unwrap();
         let source = temp.path().join("official.xml");
-        let destination = temp.path().join("rbw.xml");
+        let destination = temp.path().join("opus.xml");
         File::create(&source)
             .unwrap()
             .write_all(b"<Configuration><filters><RegexFilter regex=\"(?s).*\\$\\{[^}]*\\}.*\" onMatch=\"DENY\" onMismatch=\"NEUTRAL\"/></filters></Configuration>")
@@ -2005,7 +2011,7 @@ mod tests {
     fn logging_config_without_mojang_lookup_mitigation_is_rejected() {
         let temp = tempfile::tempdir().unwrap();
         let source = temp.path().join("unsafe.xml");
-        let destination = temp.path().join("rbw.xml");
+        let destination = temp.path().join("opus.xml");
         fs::write(
             &source,
             "<Configuration><filters></filters></Configuration>",
@@ -2053,7 +2059,7 @@ mod tests {
     }
 
     #[test]
-    fn forge_bootstrap_plan_stages_both_rbw_mods_and_keeps_them_out_of_system_classpath() {
+    fn forge_bootstrap_plan_stages_both_opus_mods_and_keeps_them_out_of_system_classpath() {
         let fixture = ForgeFixture::new();
         let mode = fixture.mode();
         let identity = GameIdentity::offline("ForgeFixture").unwrap();
@@ -2063,10 +2069,13 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(plan.main_class, "dev.rbw.bootstrap.ForgeBootstrapMain");
+        assert_eq!(
+            plan.main_class,
+            "org.polydevs.opusmc.bootstrap.ForgeBootstrapMain"
+        );
         assert_eq!(
             plan.game_arguments,
-            vec![OsString::from("--rbw-game-arguments-stdin")]
+            vec![OsString::from("--opus-game-arguments-stdin")]
         );
         assert!(plan.stdin_payload.is_some());
 

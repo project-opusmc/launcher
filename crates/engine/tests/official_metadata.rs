@@ -1,10 +1,10 @@
-use rbw_platform::{Architecture, OperatingSystem, Platform};
-use rbw_runtime::{
+use opus_engine::{
     DownloadSpec, Downloader, JAVA_RUNTIME_INDEX_SHA1, JAVA_RUNTIME_INDEX_SIZE,
     JAVA_RUNTIME_INDEX_URL, JavaRuntimeIndex, MINECRAFT_VERSION, MINECRAFT_VERSION_JSON_SHA1,
     MINECRAFT_VERSION_JSON_URL, MinecraftVersion, RuleContext, VERSION_MANIFEST_URL,
     VersionManifest, library_is_allowed, native_classifier,
 };
+use opus_platform::{Architecture, OperatingSystem, Platform};
 use std::fs::File;
 use std::io::BufReader;
 

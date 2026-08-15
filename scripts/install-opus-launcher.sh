@@ -2,10 +2,9 @@
 set -euo pipefail
 
 opus_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-opus_guard="${opus_root}/scripts/rbw-process-guard.sh"
+opus_guard="${opus_root}/scripts/opus-process-guard.sh"
 opus_bundle="${opus_root}/target/release/bundle/macos/Opus Launcher.app"
 opus_destination='/Applications/Opus Launcher.app'
-legacy_destination='/Applications/RBW Client.app'
 
 "${opus_guard}" assert-idle
 test -f "${opus_bundle}/Contents/MacOS/opus-launcher"
@@ -24,12 +23,6 @@ if [[ -d "${opus_destination}" ]]; then
   opus_trash="${HOME}/.Trash/Opus Launcher.app.$(date +%Y%m%d-%H%M%S)"
   mv "${opus_destination}" "${opus_trash}"
   echo "Previous Opus Launcher moved to: ${opus_trash}"
-fi
-
-if [[ -d "${legacy_destination}" ]]; then
-  legacy_trash="${HOME}/.Trash/RBW Client.app.before-opus-$(date +%Y%m%d-%H%M%S)"
-  mv "${legacy_destination}" "${legacy_trash}"
-  echo "Legacy RBW Client moved to: ${legacy_trash}"
 fi
 
 mv "${opus_stage}/Opus Launcher.app" "${opus_destination}"

@@ -20,18 +20,18 @@ account, settings, installation state and launch progress.
   installation, authentication, token handling and game launch planning.
 - The desktop frontend uses narrowly scoped Tauri commands and status events;
   browser code never receives refresh tokens or Minecraft access tokens.
-- Non-secret settings live in RBW's isolated data directory. Microsoft refresh
+- Non-secret settings live in OPUS's isolated data directory. Microsoft refresh
   credentials remain solely in the operating-system keychain.
-- The launcher ships with RBW's first-party public Microsoft application Client
+- The launcher ships with OPUS's first-party public Microsoft application Client
   ID. Choosing **Sign in with Microsoft** opens Microsoft's official
   account page in the system browser. Authorization Code + PKCE and a
   state-validated localhost callback return the result automatically; no
   password, authorization code, token or client secret enters the frontend.
 - Mojang's manual AppID review and allow-list approval is an external release
-  prerequisite for the embedded public Client ID. It is owned by the RBW
+  prerequisite for the embedded public Client ID. It is owned by the OPUS
   publisher, never delegated to end users, and cannot be replaced with another
   launcher's identity.
-- On macOS, RBW opens a small native universal `Ranked Bedwars Client.app` through
+- On macOS, OPUS opens a small native universal `Opus Client.app` through
   LaunchServices. Its only job is to set the game working directory and
   `exec` the managed x86_64 Java 8 command. No Carbon process transform, JNI,
   AppKit manipulation, or `-XstartOnFirstThread` is used. `exec` preserves the

@@ -1,10 +1,10 @@
 #[cfg(not(feature = "qa-edition"))]
-use rbw_auth::{BrowserLoginCancellation, MicrosoftAuthenticator, RefreshTokenStore};
-use rbw_platform::{OperatingSystem, Platform, RbwPaths};
-use rbw_runtime::{
+use opus_auth::{BrowserLoginCancellation, MicrosoftAuthenticator, RefreshTokenStore};
+use opus_engine::{
     GameIdentity, InstallProgress, Installer, LaunchMode, LaunchOptions, LaunchPlan,
     MinecraftLayout, launch_game as launch_direct_game, launch_game_via_macos_app,
 };
+use opus_platform::{OperatingSystem, OpusPaths, Platform};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs::{self, OpenOptions};
@@ -43,6 +43,7 @@ const SETTINGS_FILE: &str = "launcher-settings-v1.json";
 /// can migrate independently without risking launch settings.
 const UTILITY_SETTINGS_FILE: &str = "utility-settings-v1.json";
 const UTILITY_SETTINGS_SCHEMA_VERSION: u8 = 1;
+#[cfg(feature = "qa-edition")]
 const QA_PROFILE_FILE: &str = "offline-profile-v1.json";
 /// Public identifier of Opus's Microsoft Entra application. Desktop clients are
 /// public OAuth clients, so this identifier is safe to distribute; refresh
@@ -665,11 +666,6 @@ fn snapshot_blocking(
     let platform = Platform::detect().map_err(display_error)?;
     let paths = launcher_paths()?;
     let data_directory = paths.root.display().to_string();
-    #[cfg(not(feature = "qa-edition"))]
-    import_legacy_demo_profile(&paths)?;
-    accounts::migrate_metadata(&paths)?;
-    #[cfg(not(feature = "qa-edition"))]
-    migrate_legacy_microsoft_account(&paths);
     let account_view = accounts::load(&paths)?;
     let account_summaries = account_view.summaries();
     let selected_account_id = accounts::selected_id(&account_view);
@@ -751,7 +747,7 @@ async fn install_minecraft(
                 // The window may be closed while an install is finishing; that
                 // does not invalidate the verified installation itself.
                 let _ = app_for_progress.emit(
-                    "rbw://install-progress",
+                    "opus://install-progress",
                     InstallProgressEvent::from(progress),
                 );
             })
@@ -941,15 +937,6 @@ fn cancel_microsoft_login(state: tauri::State<'_, AppState>) -> bool {
     state.cancel_login()
 }
 
-#[cfg(not(feature = "qa-edition"))]
-#[tauri::command]
-fn logout(state: tauri::State<'_, AppState>) -> Result<(), String> {
-    state.require_runtime_mode()?;
-    let store = RefreshTokenStore::new().map_err(display_error)?;
-    store.delete().map_err(display_error)?;
-    Ok(())
-}
-
 #[tauri::command]
 async fn launch_game(
     state: tauri::State<'_, AppState>,
@@ -973,8 +960,8 @@ async fn launch_game(
     })
     .await
     .map_err(|error| format!("game launch preparation task failed: {error}"))??;
-    // A legacy credential may acquire its UUID during preparation. Move the
-    // lock to the canonical catalog ID before exposing the running session.
+    // Preparation resolves the canonical catalog identity before the running
+    // session is exposed to the frontend.
     launch_attempt.rekey(&prepared.account_id)?;
 
     let session_id = prepared.plan.session_id.clone();
@@ -1009,7 +996,7 @@ async fn launch_game(
                 simulated: false,
             },
         };
-        let _ = app_for_wait.emit("rbw://game-finished", event);
+        let _ = app_for_wait.emit("opus://game-finished", event);
         if hide_launcher && let Some(window) = app_for_wait.get_webview_window("main") {
             let _ = window.show();
             let _ = window.set_focus();
@@ -1070,7 +1057,7 @@ fn simulate_developer_game(
             return;
         };
         let _ = app_for_finish.emit(
-            "rbw://game-finished",
+            "opus://game-finished",
             GameLaunchFinished {
                 session_id: finished.session_id,
                 log_directory: None,
@@ -1101,19 +1088,19 @@ fn utility_settings_path() -> Result<PathBuf, String> {
 }
 
 /// Resolve storage for the active launcher flavor. The QA flavor never uses
-/// `RbwPaths::discover`, which is the Premium root and honors `OPUS_HOME`.
-fn launcher_paths() -> Result<RbwPaths, String> {
+/// `OpusPaths::discover`, which is the Premium root and honors `OPUS_HOME`.
+fn launcher_paths() -> Result<OpusPaths, String> {
     #[cfg(feature = "ui-preview")]
     {
-        return RbwPaths::discover_ui_preview().map_err(display_error);
+        OpusPaths::discover_ui_preview().map_err(display_error)
     }
     #[cfg(all(feature = "qa-edition", not(feature = "ui-preview")))]
     {
-        RbwPaths::discover_qa().map_err(display_error)
+        OpusPaths::discover_qa().map_err(display_error)
     }
     #[cfg(not(feature = "qa-edition"))]
     {
-        RbwPaths::discover().map_err(display_error)
+        OpusPaths::discover().map_err(display_error)
     }
 }
 
@@ -1254,28 +1241,6 @@ fn write_utility_settings_atomic(path: &Path, settings: &UtilitySettings) -> Res
     write_json_atomic(path, settings)
 }
 
-#[cfg(not(feature = "qa-edition"))]
-fn import_legacy_demo_profile(paths: &RbwPaths) -> Result<(), String> {
-    let Ok(legacy_paths) = RbwPaths::discover_qa() else {
-        return Ok(());
-    };
-    let legacy_profile_path = legacy_paths.root.join(QA_PROFILE_FILE);
-    if !legacy_profile_path.is_file() {
-        return Ok(());
-    }
-    let Ok(bytes) = fs::read(&legacy_profile_path) else {
-        return Ok(());
-    };
-    let Ok(profile) = serde_json::from_slice::<QaProfile>(&bytes) else {
-        return Ok(());
-    };
-    if GameIdentity::offline(&profile.username).is_err() {
-        return Ok(());
-    }
-    accounts::import_offline_if_missing(paths, &profile.username)?;
-    Ok(())
-}
-
 #[cfg(feature = "qa-edition")]
 fn qa_profile_path() -> Result<PathBuf, String> {
     Ok(launcher_paths()?.root.join(QA_PROFILE_FILE))
@@ -1365,13 +1330,14 @@ fn prepare_game_launch(
 }
 
 fn resolve_launch_identity(
-    paths: &RbwPaths,
+    paths: &OpusPaths,
     requested_account_id: &str,
 ) -> Result<(GameIdentity, String, String), String> {
     let view = accounts::load(paths)?;
     let account_id = if requested_account_id.trim().is_empty() {
-        accounts::selected_id(&view)
-            .ok_or_else(|| "Add a Microsoft account or demo profile before launching".to_owned())?
+        accounts::selected_id(&view).ok_or_else(|| {
+            "Add a Microsoft account or unofficial profile before launching".to_owned()
+        })?
     } else {
         requested_account_id.trim().to_owned()
     };
@@ -1381,44 +1347,27 @@ fn resolve_launch_identity(
             let username = identity.username.clone();
             Ok((identity, record.id, username))
         }
-        ResolvedAccount::Microsoft { record, legacy } => {
+        ResolvedAccount::Microsoft(record) => {
             #[cfg(feature = "qa-edition")]
             {
-                let _ = (record, legacy);
-                Err("Microsoft accounts are unavailable in this legacy QA build".to_owned())
+                let _ = record;
+                Err("Microsoft accounts are unavailable in the QA build".to_owned())
             }
             #[cfg(not(feature = "qa-edition"))]
             {
                 let authenticator = microsoft_authenticator()?;
-                let store = match record.as_ref() {
-                    Some(account) => {
-                        RefreshTokenStore::for_profile(&account.uuid).map_err(display_error)?
-                    }
-                    None if legacy => RefreshTokenStore::new().map_err(display_error)?,
-                    None => return Err("Microsoft account metadata is missing".to_owned()),
-                };
+                let store = RefreshTokenStore::for_profile(&record.uuid).map_err(display_error)?;
                 let account = authenticator
                     .refresh_session(&store)
                     .map_err(display_error)?;
                 account
                     .save_refresh_token_for_profile()
                     .map_err(display_error)?;
-                let summary = if legacy {
-                    accounts::upsert_official_microsoft(
-                        paths,
-                        &account.session.username,
-                        &account.session.uuid,
-                    )?
-                } else {
-                    accounts::upsert_microsoft(
-                        paths,
-                        &account.session.username,
-                        &account.session.uuid,
-                    )?
-                };
-                if legacy {
-                    let _ = RefreshTokenStore::new().and_then(|legacy_store| legacy_store.delete());
-                }
+                let summary = accounts::upsert_microsoft(
+                    paths,
+                    &account.session.username,
+                    &account.session.uuid,
+                )?;
                 let identity = GameIdentity::authenticated(
                     &account.session.username,
                     &account.session.uuid,
@@ -1430,36 +1379,6 @@ fn resolve_launch_identity(
                 Ok((identity, summary.id, username))
             }
         }
-    }
-}
-
-/// Migrate the original single-account keychain entry into the unified
-/// profile catalog before rendering the account pane. The refresh is best
-/// effort so an offline launcher can still open and offer a reconnect action.
-#[cfg(not(feature = "qa-edition"))]
-fn migrate_legacy_microsoft_account(paths: &RbwPaths) {
-    let result = (|| -> Result<(), String> {
-        let legacy_store = RefreshTokenStore::new().map_err(display_error)?;
-        if legacy_store.load().map_err(display_error)?.is_none() {
-            return Ok(());
-        }
-        let authenticator = microsoft_authenticator()?;
-        let account = authenticator
-            .refresh_session(&legacy_store)
-            .map_err(display_error)?;
-        account
-            .save_refresh_token_for_profile()
-            .map_err(display_error)?;
-        accounts::upsert_official_microsoft(
-            paths,
-            &account.session.username,
-            &account.session.uuid,
-        )?;
-        legacy_store.delete().map_err(display_error)?;
-        Ok(())
-    })();
-    if let Err(error) = result {
-        eprintln!("[OPUS/AUTH] legacy Microsoft profile migration deferred: {error}");
     }
 }
 
@@ -1631,7 +1550,6 @@ pub fn run() {
             remove_account,
             login_with_microsoft,
             cancel_microsoft_login,
-            logout,
             launch_game,
             set_developer_test_profile,
             simulate_developer_game,
@@ -1657,7 +1575,6 @@ pub fn run() {
             remove_account,
             login_with_microsoft,
             cancel_microsoft_login,
-            logout,
             launch_game,
         ]);
 
@@ -1693,9 +1610,9 @@ mod tests {
     }
 
     #[test]
-    fn legacy_settings_with_a_user_supplied_client_id_still_deserialize() {
+    fn settings_ignore_unknown_fields() {
         let settings: LauncherSettings = serde_json::from_str(
-            r#"{"maxMemoryMib":2048,"closeLauncherOnGameStart":false,"microsoftClientId":"old-client-id"}"#,
+            r#"{"maxMemoryMib":2048,"closeLauncherOnGameStart":false,"unknownField":"ignored"}"#,
         )
         .unwrap();
         assert_eq!(settings.max_memory_mib, 2048);
@@ -1721,18 +1638,18 @@ mod tests {
     }
 
     #[test]
-    fn game_launch_attempt_rekeys_legacy_identity_without_opening_a_duplicate_slot() {
+    fn game_launch_attempt_rekeys_provisional_identity_without_opening_a_duplicate_slot() {
         let state = AppState::default();
-        let mut attempt = state.begin_game_launch("legacy-default").unwrap();
+        let mut attempt = state.begin_game_launch("offline:pending").unwrap();
         attempt.rekey("microsoft:1234").unwrap();
 
-        let legacy_again = state.begin_game_launch("legacy-default").unwrap();
+        let provisional_again = state.begin_game_launch("offline:pending").unwrap();
         assert!(state.begin_game_launch("microsoft:1234").is_err());
         assert_eq!(
             state.active_launch_account_ids(),
-            vec!["legacy-default".to_owned(), "microsoft:1234".to_owned()]
+            vec!["microsoft:1234".to_owned(), "offline:pending".to_owned()]
         );
-        drop(legacy_again);
+        drop(provisional_again);
     }
 
     #[test]
@@ -1868,7 +1785,7 @@ mod tests {
     #[test]
     fn install_progress_event_only_serializes_safe_aggregate_fields() {
         let event = InstallProgressEvent::from(InstallProgress {
-            phase: rbw_runtime::InstallPhase::MinecraftAssets,
+            phase: opus_engine::InstallPhase::MinecraftAssets,
             completed_files: 12,
             total_files: 42,
             downloaded_files: 7,
@@ -1900,7 +1817,7 @@ mod tests {
     fn qa_profile_validation_accepts_only_minecraft_offline_usernames() {
         assert!(
             validate_qa_profile(&QaProfile {
-                username: "Demo_User9".to_owned(),
+                username: "Qa_User9".to_owned(),
             })
             .is_ok()
         );
@@ -1922,13 +1839,10 @@ mod tests {
     #[test]
     fn qa_profile_snapshot_has_no_token_or_uuid() {
         let snapshot = OfflineProfileSnapshot::from(QaProfile {
-            username: "Demo_User9".to_owned(),
+            username: "Qa_User9".to_owned(),
         });
         let value = serde_json::to_value(snapshot).unwrap();
-        assert_eq!(
-            value.get("username"),
-            Some(&serde_json::json!("Demo_User9"))
-        );
+        assert_eq!(value.get("username"), Some(&serde_json::json!("Qa_User9")));
         assert_eq!(value.get("valid"), Some(&serde_json::Value::Bool(true)));
         assert!(value.get("accessToken").is_none());
         assert!(value.get("uuid").is_none());

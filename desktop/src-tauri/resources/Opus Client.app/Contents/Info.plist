@@ -9,7 +9,7 @@
 	<key>CFBundleExecutable</key>
 	<string>Opus Client</string>
 	<key>CFBundleIdentifier</key>
-	<string>dev.opus.client.game</string>
+	<string>org.polydevs.opusmc.client.game</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>

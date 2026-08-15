@@ -49,7 +49,6 @@ export type TuiAccount = {
   badge: string;
   ready: boolean;
   selected: boolean;
-  legacy: boolean;
 };
 
 export type TuiSnapshot = {
@@ -1091,7 +1090,7 @@ function taskPresentation(busy: string, account: TuiAccount | null) {
 function badgeToneClass(badge: string) {
   if (badge.toLowerCase() === "premium") return "is-premium";
   if (badge.toLowerCase() === "official") return "is-official";
-  if (badge.toLowerCase() === "unofficial" || badge.toLowerCase() === "demo") return "is-unofficial";
+  if (badge.toLowerCase() === "unofficial") return "is-unofficial";
   return "is-generic";
 }
 

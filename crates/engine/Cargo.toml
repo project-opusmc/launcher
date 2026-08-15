@@ -1,12 +1,12 @@
 [package]
-name = "rbw-runtime"
+name = "opus-engine"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
 [features]
-# This exists only for the debug-only, isolated RBW Client Demo UI-preview
+# This exists only for the debug-only, isolated OPUS Client UI-preview
 # bundle. Production keeps the reviewed release artifact lock below.
 ui-preview-artifact = []
 
@@ -14,7 +14,7 @@ ui-preview-artifact = []
 fs2.workspace = true
 md5.workspace = true
 rayon.workspace = true
-rbw-platform = { path = "../platform" }
+opus-platform = { path = "../platform" }
 regex.workspace = true
 reqwest.workspace = true
 serde.workspace = true

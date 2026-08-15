@@ -45,7 +45,7 @@ fn build_macos_game_stub() {
     let staged_executable = PathBuf::from(
         env::var("OUT_DIR").expect("Cargo must provide OUT_DIR for the game app stub"),
     )
-    .join("rbw-game-app-stub");
+    .join("opus-game-app-stub");
     let _ = fs::remove_file(&staged_executable);
     let _ = fs::remove_file(staged_executable.with_extension("lipo"));
 

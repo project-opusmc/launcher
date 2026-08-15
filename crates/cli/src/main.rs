@@ -1,14 +1,20 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use rbw_auth::{MICROSOFT_CLIENT_ID_ENV, MicrosoftAuthenticator, RefreshTokenStore};
-use rbw_platform::{OperatingSystem, Platform, RbwPaths};
-use rbw_runtime::{
+use opus_auth::{MICROSOFT_CLIENT_ID_ENV, MicrosoftAuthenticator, RefreshTokenStore};
+use opus_engine::{
     GameIdentity, Installer, LaunchMode, LaunchOptions, LaunchPlan, MinecraftLayout, launch_game,
 };
+use opus_platform::{OperatingSystem, OpusPaths, Platform};
 use std::path::{Path, PathBuf};
 
+const DEFAULT_BOOTSTRAP_DIR: &str = "desktop/src-tauri/resources/bootstrap";
+
 #[derive(Debug, Parser)]
-#[command(name = "rbw", version, about = "Opus Client 1.8.9 launcher")]
+#[command(
+    name = "opus",
+    version,
+    about = "Opus Launcher diagnostics for Minecraft 1.8.9"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -25,7 +31,7 @@ enum Command {
         /// Path to the local JAR obtained from OptiFine.
         path: PathBuf,
     },
-    /// Manage the official Microsoft Minecraft account.
+    /// Manage the CLI Microsoft Minecraft credential.
     Account {
         #[command(subcommand)]
         command: AccountCommand,
@@ -42,7 +48,7 @@ enum Command {
         max_memory_mib: u32,
         #[arg(long)]
         dry_run: bool,
-        #[arg(long, default_value = "game/build/bootstrap")]
+        #[arg(long, default_value = DEFAULT_BOOTSTRAP_DIR)]
         bootstrap_dir: PathBuf,
     },
 }
@@ -84,14 +90,14 @@ fn launch(
     let platform = Platform::detect()?;
     if platform.os == OperatingSystem::MacOs && !dry_run {
         anyhow::bail!(
-            "CLI game launch is disabled on macOS. Use the packaged Opus Client.app, which starts managed Java through its LaunchServices game stub. --dry-run remains available for diagnostics."
+            "CLI game launch is disabled on macOS. Use the packaged Opus Launcher.app, which starts managed Java through the bundled Opus Client game stub. --dry-run remains available for diagnostics."
         );
     }
-    let paths = RbwPaths::discover()?;
+    let paths = OpusPaths::discover()?;
     let layout = MinecraftLayout::new(paths);
     let installer = Installer::new(layout.clone(), platform)?;
 
-    println!("Opus Client");
+    println!("Opus Launcher");
     println!("verifying Forge + OptiFine 1.8.9 installation");
     let report = installer.prepare()?;
     println!(
@@ -200,7 +206,7 @@ struct ForgeBootstrapArtifacts {
 fn forge_bootstrap_artifacts(directory: &Path) -> Result<ForgeBootstrapArtifacts> {
     if !directory.is_dir() {
         anyhow::bail!(
-            "OPUS Runtime artifacts are missing at {}; stage a verified prepareRuntime output",
+            "OPUS Runtime artifacts are missing at {}; stage a verified Runtime output with scripts/prepare-desktop-assets.sh",
             directory.display()
         );
     }
@@ -250,11 +256,11 @@ fn forge_bootstrap_artifacts(directory: &Path) -> Result<ForgeBootstrapArtifacts
 
 fn install() -> Result<()> {
     let platform = Platform::detect()?;
-    let paths = RbwPaths::discover()?;
+    let paths = OpusPaths::discover()?;
     let root = paths.root.clone();
     let installer = Installer::new(MinecraftLayout::new(paths), platform)?;
 
-    println!("Opus Client installer");
+    println!("Opus Launcher installer");
     println!("version: Forge + OptiFine 1.8.9 (locked)");
     println!("data directory: {}", root.display());
     let report = installer.install()?;
@@ -272,7 +278,7 @@ fn install() -> Result<()> {
 
 fn import_optifine(path: &Path) -> Result<()> {
     let platform = Platform::detect()?;
-    let paths = RbwPaths::discover()?;
+    let paths = OpusPaths::discover()?;
     let installer = Installer::new(MinecraftLayout::new(paths), platform)?;
     let destination = installer.import_optifine(path)?;
     println!("OptiFine verified and imported: {}", destination.display());
@@ -281,10 +287,10 @@ fn import_optifine(path: &Path) -> Result<()> {
 
 fn doctor() -> Result<()> {
     let platform = Platform::detect()?;
-    let paths = RbwPaths::discover()?;
+    let paths = OpusPaths::discover()?;
     let translation_available = platform.translation_available()?;
 
-    println!("Opus Client doctor");
+    println!("Opus Launcher doctor");
     println!("host: {} {}", platform.os, platform.host_arch);
     println!("game runtime: {} {}", platform.os, platform.game_arch);
     println!("translation required: {}", platform.requires_translation());
@@ -302,7 +308,7 @@ fn doctor() -> Result<()> {
         ),
         Err(error) => println!("managed runtime: not ready ({error})"),
     }
-    match forge_bootstrap_artifacts(Path::new("game/build/bootstrap")) {
+    match forge_bootstrap_artifacts(Path::new(DEFAULT_BOOTSTRAP_DIR)) {
         Ok(_) => println!("Opus Forge bootstrap: ready"),
         Err(error) => println!("Opus Forge bootstrap: not ready ({error})"),
     }

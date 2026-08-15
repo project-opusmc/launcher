@@ -1,5 +1,5 @@
 [package]
-name = "rbw-platform"
+name = "opus-platform"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

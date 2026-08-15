@@ -1,20 +1,20 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Opus UI work must never create a second game/launcher instance. Keep this
-# narrow: it recognizes only processes owned by Opus's QA/preview runtime.
-rbw_processes() {
+# Installer operations must not replace a running Opus bundle. Keep matching
+# narrow so unrelated Java and desktop processes are never affected.
+opus_processes() {
   # The caller's shell can contain an Opus path in its command line (for
   # example while inspecting a bundle). Exclude this script and all parents
   # before matching so an inspection can never flag itself as a live client.
-  rbw_ignored_pids=""
-  rbw_cursor="$$"
-  while [[ "${rbw_cursor}" =~ ^[0-9]+$ && "${rbw_cursor}" -gt 1 ]]; do
-    rbw_ignored_pids="${rbw_ignored_pids} ${rbw_cursor} "
-    rbw_cursor="$(ps -o ppid= -p "${rbw_cursor}" | tr -d '[:space:]')"
+  opus_ignored_pids=""
+  opus_cursor="$$"
+  while [[ "${opus_cursor}" =~ ^[0-9]+$ && "${opus_cursor}" -gt 1 ]]; do
+    opus_ignored_pids="${opus_ignored_pids} ${opus_cursor} "
+    opus_cursor="$(ps -o ppid= -p "${opus_cursor}" | tr -d '[:space:]')"
   done
 
-  ps -axo pid=,command= | awk -v ignored="${rbw_ignored_pids}" '
+  ps -axo pid=,command= | awk -v ignored="${opus_ignored_pids}" '
     {
       line = $0
       sub(/^[[:space:]]*/, "", line)
@@ -25,10 +25,10 @@ rbw_processes() {
       }
       command = line
       sub(/^[0-9]+[[:space:]]+/, "", command)
-      if (command ~ /\/Applications\/(Opus Launcher|RBW Client)( QA| Demo)?\.app\/Contents\/MacOS\/(opus-launcher|rbw-desktop)/ \
-          || command ~ /rbw\.ui\.preview\.control\.file=/ \
-          || command ~ /\.opus-launcher-ui-preview\/game/ \
-          || command ~ /\.rbw-client-ui-preview\/game/) {
+      if (command ~ /\/Applications\/Opus Launcher( QA| Preview)?\.app\/Contents\/MacOS\/opus-launcher/ \
+          || command ~ /\/Applications\/Opus Client\.app\/Contents\/MacOS\/Opus Client/ \
+          || command ~ /opus\.ui\.preview\.control\.file=/ \
+          || command ~ /\.opus-launcher-ui-preview\/game/) {
         print pid "\t" command
       }
     }
@@ -36,14 +36,14 @@ rbw_processes() {
 }
 
 print_processes() {
-  local rbw_found
-  rbw_found="$(rbw_processes)"
-  if [[ -z "${rbw_found}" ]]; then
+  local opus_found
+  opus_found="$(opus_processes)"
+  if [[ -z "${opus_found}" ]]; then
     echo "Opus process guard: idle"
     return 0
   fi
   echo "Opus process guard: active launcher processes:"
-  printf '%s\n' "${rbw_found}"
+  printf '%s\n' "${opus_found}"
   return 1
 }
 
@@ -58,23 +58,23 @@ case "${1:-status}" in
     fi
     ;;
   stop)
-    rbw_found="$(rbw_processes)"
-    if [[ -z "${rbw_found}" ]]; then
+    opus_found="$(opus_processes)"
+    if [[ -z "${opus_found}" ]]; then
       echo "Opus process guard: idle"
       exit 0
     fi
-    printf '%s\n' "${rbw_found}" | while IFS=$'\t' read -r rbw_pid _; do
-      kill -TERM "${rbw_pid}"
+    printf '%s\n' "${opus_found}" | while IFS=$'\t' read -r opus_pid _; do
+      kill -TERM "${opus_pid}"
     done
-    for rbw_attempt in $(seq 1 10); do
-      if [[ -z "$(rbw_processes)" ]]; then
+    for opus_attempt in $(seq 1 10); do
+      if [[ -z "$(opus_processes)" ]]; then
         echo "Opus process guard: stopped"
         exit 0
       fi
       sleep 1
     done
     echo "Opus process guard: a process did not stop gracefully:" >&2
-    rbw_processes >&2
+    opus_processes >&2
     exit 1
     ;;
   *)

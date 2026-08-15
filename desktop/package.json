@@ -14,7 +14,7 @@
     "tauri:build:qa": "tauri build --debug --bundles app --runner ../../scripts/tauri-cargo-qa.sh --config src-tauri/tauri.qa.conf.json",
     "tauri:build:ui-preview": "tauri build --debug --bundles app --runner ../../scripts/tauri-cargo-ui-preview.sh --config src-tauri/tauri.ui-preview.conf.json",
     "tauri:install:premium": "bash ../scripts/install-opus-launcher.sh",
-    "tauri:install:ui-preview": "bash ../scripts/install-rbw-demo.sh",
+    "tauri:install:qa": "bash ../scripts/install-opus-qa.sh",
     "tauri": "tauri"
   },
   "dependencies": {

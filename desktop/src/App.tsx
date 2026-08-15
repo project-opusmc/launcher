@@ -169,14 +169,13 @@ function isTauriRuntime() {
 
 function previewSnapshot(): TuiSnapshot {
   const account: TuiAccount = {
-    id: "demo:preview",
+    id: "offline:preview",
     username: "PreviewPlayer",
     uuid: "00000000000000000000000000000000",
     kind: "offline",
     badge: "unofficial",
     ready: true,
     selected: true,
-    legacy: false,
   };
   return {
     platform: "UI Preview",
@@ -319,7 +318,7 @@ export default function App() {
     if (!isTauriRuntime()) return;
     let disposed = false;
     let unlisten: (() => void) | undefined;
-    void listen<GameLaunchFinished>("rbw://game-finished", (event) => {
+    void listen<GameLaunchFinished>("opus://game-finished", (event) => {
       if (disposed) return;
       const result = event.payload;
       if (!result.simulated && !knownSessions.current.delete(result.sessionId)) {
@@ -361,7 +360,7 @@ export default function App() {
     if (!isTauriRuntime()) return;
     let disposed = false;
     let unlisten: (() => void) | undefined;
-    void listen<InstallProgressEvent>("rbw://install-progress", (event) => {
+    void listen<InstallProgressEvent>("opus://install-progress", (event) => {
       if (!disposed) setInstallProgress(event.payload);
     }).then((dispose) => {
       if (disposed) dispose();

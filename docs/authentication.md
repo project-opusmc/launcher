@@ -1,16 +1,16 @@
 # Authentication
 
-All Microsoft/Minecraft identity code lives in `launcher/rbw-auth/src/lib.rs`.
+All Microsoft/Minecraft identity code lives in `crates/auth/src/lib.rs`.
 The desktop backend calls it from `desktop/src-tauri/src/lib.rs`; the CLI calls
-it from `launcher/rbw-launcher/src/main.rs`. The QA build does not compile it
-at all.
+it from `crates/cli/src/main.rs`. The QA build does not register Microsoft
+authentication commands and offline profiles do not access the keychain.
 
 ## Client ID
 
-RBW ships a first-party **public** OAuth client ID, embedded as
-`RBW_MICROSOFT_CLIENT_ID` in `desktop/src-tauri/src/lib.rs`. Public desktop
+OPUS ships a first-party **public** OAuth client ID, embedded as
+`OPUS_MICROSOFT_CLIENT_ID` in `desktop/src-tauri/src/lib.rs`. Public desktop
 clients have no secret, so distributing the identifier is expected. The CLI
-instead reads `RBW_MICROSOFT_CLIENT_ID` from the environment
+instead reads `OPUS_MICROSOFT_CLIENT_ID` from the environment
 (`MICROSOFT_CLIENT_ID_ENV`) — that path exists for non-desktop development only.
 
 `validate_client_id` accepts at most 128 characters of ASCII alphanumerics and
@@ -19,7 +19,7 @@ hyphens.
 > **Release prerequisite.** Minecraft Services separately reviews and
 > allow-lists Java game-service integrations. Until Mojang approves this exact
 > AppID through its review form, `login_with_xbox` returns HTTP 403 with
-> `Invalid app registration`, which RBW maps to the typed
+> `Invalid app registration`, which OPUS maps to the typed
 > `AuthError::MinecraftAppRegistrationRejected`. No user action or code change
 > can bypass it. Never substitute another launcher's client ID.
 
@@ -101,9 +101,10 @@ the CLI do.
 
 ## Credential storage
 
-`RefreshTokenStore` wraps a single OS keychain entry:
+`RefreshTokenStore` wraps one OS keychain entry per Microsoft/Minecraft profile:
 
-- service `dev.rbw.client.microsoft.refresh-token`, account `default`
+- service `org.polydevs.opusmc.launcher.microsoft.refresh-token`, with one
+  account entry per Minecraft profile UUID
 - `save` refuses an empty token
 - `load` maps `NoEntry` to `Ok(None)`
 - `delete` returns whether an entry existed
@@ -125,9 +126,10 @@ neither the URL nor the request id. `MinecraftSession::redacted_summary` returns
 
 ## What the frontend sees
 
-Never a token, a refresh credential, or a client secret. `login_with_microsoft`
-returns `{ profile: "<name> (<uuid>)" }`; `launcher_snapshot` returns
-`accountStored: bool`. That is the entire account surface. See
+Never a token, authorization code, refresh credential, password, or client
+secret. `login_with_microsoft` returns a redacted profile plus a non-secret
+account summary. `launcher_snapshot` returns the complete non-secret account
+catalog, selected account ID, and active account IDs. See
 [desktop-ipc.md](desktop-ipc.md).
 
 ## Concurrency

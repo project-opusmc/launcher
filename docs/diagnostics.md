@@ -2,12 +2,13 @@
 
 Each managed game launch has a local session directory. The launcher returns
 that directory with the game-finished event, and it normally lives under
-`<RBW data root>/logs/<session-id>/`.
+`<OPUS data root>/logs/<session-id>/`.
 
-The default data root is `~/.rbw-client` on macOS and Linux for Premium, and
-`~/.rbw-client-qa` for the offline QA build. On Windows the corresponding
-roots are under `%LOCALAPPDATA%/RBWClient` and `%LOCALAPPDATA%/RBWClientQA`.
-`RBW_HOME` overrides the Premium root; `RBW_QA_HOME` overrides only the QA
+The default data root is `~/.opus-launcher` on macOS and Linux for Premium, and
+`~/.opus-launcher-qa` for the offline QA build. On Windows the corresponding
+roots are under `%LOCALAPPDATA%/OpusLauncher` and
+`%LOCALAPPDATA%/OpusLauncherQA`.
+`OPUS_HOME` overrides the Premium root; `OPUS_QA_HOME` overrides only the QA
 root.
 
 ## Files in a session
@@ -17,7 +18,7 @@ root.
 | `session-manifest.json` | Redacted launch metadata and the session's diagnostic policy. Treat it as an index for the session, not as a replay of gameplay. | The launcher failed before it created the session manifest. |
 | `diagnostics.jsonl` | Local, newline-delimited telemetry. Each line is an independently parseable JSON event with a schema version and a process-relative `t_ms`. | The JVM did not reach the telemetry bootstrap, or stopped before it flushed output. |
 | `launcher.log` / `launcher-summary.json` | Redacted launch record and final launcher outcome. | The launcher failed before it could create the relevant file. |
-| `game.stdout.log` / `game.stderr.log` | The launcher-managed JVM, Forge bridge, Forge/OptiFine, and RBW coremod output. Start here for a failed startup, transformer error, or Java exception. | A failure happened before the process streams were attached. |
+| `game.stdout.log` / `game.stderr.log` | The launcher-managed JVM, Forge bridge, Forge/OptiFine, and OPUS coremod output. Start here for a failed startup, transformer error, or Java exception. | A failure happened before the process streams were attached. |
 | `minecraft.latest.log` | Private snapshot of Minecraft's own `game/logs/latest.log` at the end of this launch. It is the most complete game-side text log for the session. | The game did not create `latest.log`, or the launch stopped before it could be captured. |
 | `gc.log` | The JVM's garbage-collection trace for this session. Use it to correlate a hitch with a collection pause; it is not a frame-time log. | The JVM stopped before GC logging initialized. |
 | `jvm_crash_<pid>.log` | A HotSpot crash report, written only for a JVM-level fatal error. | Most application failures are Java exceptions, not JVM crashes. |
@@ -39,7 +40,7 @@ text. Review them before sharing. If an interrupted launch leaves temporary raw
 stream or stdin artifacts, do not share them: a launcher input artifact can
 contain a session argument payload.
 
-These are local files. RBW does not automatically upload the diagnostics
+These are local files. OPUS does not automatically upload the diagnostics
 described here; sharing any selection of files is a deliberate user action.
 This document does not promise a retention, deletion, or rotation policy.
 
@@ -101,7 +102,7 @@ alone cannot establish that result.
 
 1. Read `session-manifest.json` and `launcher-summary.json` to confirm the session.
 2. Read `game.stderr.log`, then `game.stdout.log`, for Forge/OptiFine startup,
-   coremod, or transformer failures. Confirm the `[RBW/FORGE]` bridge/coremod
+   coremod, or transformer failures. Confirm the `[OPUS/FORGE]` bridge/coremod
    markers before diagnosing a Minecraft-side patch.
 3. Inspect `diagnostics.jsonl` for the last lifecycle event and the nearby
    `performance_window` records.

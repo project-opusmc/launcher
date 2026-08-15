@@ -6,23 +6,19 @@ use std::process::Command;
 use thiserror::Error;
 
 pub const OPUS_HOME_ENV: &str = "OPUS_HOME";
-pub const RBW_HOME_ENV: &str = "RBW_HOME";
 /// Root override for the intentionally separate QA launcher installation.
 ///
-/// This is deliberately distinct from `RBW_HOME`: an offline QA build must
+/// This is deliberately distinct from `OPUS_HOME`: an offline QA build must
 /// never pick up a Premium install, account settings, or game directory just
 /// because the Premium override is present in the environment.
 pub const OPUS_QA_HOME_ENV: &str = "OPUS_QA_HOME";
-pub const RBW_QA_HOME_ENV: &str = "RBW_QA_HOME";
 /// Root override for the disposable in-game UI preview edition.
 ///
 /// The UI preview is a third, fully isolated lane: it must not reuse either
-/// the Premium root or the ordinary offline QA/Demo root while Forge UI work
+/// the Premium root or the ordinary offline QA root while Forge UI work
 /// is being proven against a real game session.
 pub const OPUS_UI_PREVIEW_HOME_ENV: &str = "OPUS_UI_PREVIEW_HOME";
-pub const RBW_UI_PREVIEW_HOME_ENV: &str = "RBW_UI_PREVIEW_HOME";
 pub const OPUS_JAVA_HOME_ENV: &str = "OPUS_JAVA_HOME";
-pub const RBW_JAVA_HOME_ENV: &str = "RBW_JAVA_HOME";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -162,7 +158,7 @@ impl Platform {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RbwPaths {
+pub struct OpusPaths {
     pub root: PathBuf,
     pub cache: PathBuf,
     pub minecraft: PathBuf,
@@ -172,36 +168,30 @@ pub struct RbwPaths {
     pub sessions: PathBuf,
 }
 
-impl RbwPaths {
+impl OpusPaths {
     pub fn discover() -> Result<Self, PlatformError> {
-        if let Some(configured) = env::var_os(OPUS_HOME_ENV).or_else(|| env::var_os(RBW_HOME_ENV)) {
+        if let Some(configured) = env::var_os(OPUS_HOME_ENV) {
             return Self::from_root(PathBuf::from(configured));
         }
 
         let platform = Platform::detect()?;
         let base = directories::BaseDirs::new().ok_or(PlatformError::HomeDirectoryUnavailable)?;
-        let (root, legacy_root) = match platform.os {
-            OperatingSystem::Windows => (
-                base.data_local_dir().join("OpusLauncher"),
-                base.data_local_dir().join("RBWClient"),
-            ),
-            OperatingSystem::MacOs | OperatingSystem::Linux => (
-                base.home_dir().join(".opus-launcher"),
-                base.home_dir().join(".rbw-client"),
-            ),
+        let root = match platform.os {
+            OperatingSystem::Windows => base.data_local_dir().join("OpusLauncher"),
+            OperatingSystem::MacOs | OperatingSystem::Linux => {
+                base.home_dir().join(".opus-launcher")
+            }
         };
-        Self::from_root(migrate_default_root(root, legacy_root))
+        Self::from_root(root)
     }
 
     /// Resolve the storage root for the offline QA edition.
     ///
-    /// QA intentionally ignores `RBW_HOME` and has its own opt-in override.
-    /// This prevents a demo build from reading or modifying the Premium
+    /// QA intentionally ignores `OPUS_HOME` and has its own opt-in override.
+    /// This prevents a QA build from reading or modifying the Premium
     /// launcher's managed runtime, settings, logs, or credentials by mistake.
     pub fn discover_qa() -> Result<Self, PlatformError> {
-        let root = if let Some(configured) =
-            env::var_os(OPUS_QA_HOME_ENV).or_else(|| env::var_os(RBW_QA_HOME_ENV))
-        {
+        let root = if let Some(configured) = env::var_os(OPUS_QA_HOME_ENV) {
             let root = PathBuf::from(configured);
             if !root.is_absolute() {
                 return Err(PlatformError::InvalidRoot(root));
@@ -211,22 +201,17 @@ impl RbwPaths {
             let platform = Platform::detect()?;
             let base =
                 directories::BaseDirs::new().ok_or(PlatformError::HomeDirectoryUnavailable)?;
-            let (root, legacy_root) = match platform.os {
-                OperatingSystem::Windows => (
-                    base.data_local_dir().join("OpusLauncherQA"),
-                    base.data_local_dir().join("RBWClientQA"),
-                ),
-                OperatingSystem::MacOs | OperatingSystem::Linux => (
-                    base.home_dir().join(".opus-launcher-qa"),
-                    base.home_dir().join(".rbw-client-qa"),
-                ),
-            };
-            migrate_default_root(root, legacy_root)
+            match platform.os {
+                OperatingSystem::Windows => base.data_local_dir().join("OpusLauncherQA"),
+                OperatingSystem::MacOs | OperatingSystem::Linux => {
+                    base.home_dir().join(".opus-launcher-qa")
+                }
+            }
         };
 
-        // The override is useful for disposable demos, but it must not turn
+        // The override is useful for disposable QA runs, but it must not turn
         // the QA edition into a reader/writer of Premium state. Compare with
-        // the Premium resolver, including its RBW_HOME override, before any
+        // the Premium resolver, including its OPUS_HOME override, before any
         // caller constructs a layout below this root.
         let premium_root = Self::discover()?.root;
         ensure_qa_root_isolated(&root, &premium_root)?;
@@ -236,13 +221,11 @@ impl RbwPaths {
     /// Resolve the storage root for the isolated in-game UI preview edition.
     ///
     /// This uses the same offline identity policy as QA, but it deliberately
-    /// owns neither QA's game cache nor its settings. Keeping the migration
-    /// preview separate lets us prove a normal Forge client mod without
-    /// replacing the user's existing Demo installation.
+    /// owns neither QA's game cache nor its settings. Keeping the UI preview
+    /// separate lets us prove a normal Forge client mod without replacing the
+    /// user's QA installation.
     pub fn discover_ui_preview() -> Result<Self, PlatformError> {
-        let root = if let Some(configured) =
-            env::var_os(OPUS_UI_PREVIEW_HOME_ENV).or_else(|| env::var_os(RBW_UI_PREVIEW_HOME_ENV))
-        {
+        let root = if let Some(configured) = env::var_os(OPUS_UI_PREVIEW_HOME_ENV) {
             let root = PathBuf::from(configured);
             if !root.is_absolute() {
                 return Err(PlatformError::InvalidRoot(root));
@@ -252,17 +235,12 @@ impl RbwPaths {
             let platform = Platform::detect()?;
             let base =
                 directories::BaseDirs::new().ok_or(PlatformError::HomeDirectoryUnavailable)?;
-            let (root, legacy_root) = match platform.os {
-                OperatingSystem::Windows => (
-                    base.data_local_dir().join("OpusLauncherUiPreview"),
-                    base.data_local_dir().join("RBWClientUiPreview"),
-                ),
-                OperatingSystem::MacOs | OperatingSystem::Linux => (
-                    base.home_dir().join(".opus-launcher-ui-preview"),
-                    base.home_dir().join(".rbw-client-ui-preview"),
-                ),
-            };
-            migrate_default_root(root, legacy_root)
+            match platform.os {
+                OperatingSystem::Windows => base.data_local_dir().join("OpusLauncherUiPreview"),
+                OperatingSystem::MacOs | OperatingSystem::Linux => {
+                    base.home_dir().join(".opus-launcher-ui-preview")
+                }
+            }
         };
 
         let premium_root = Self::discover()?.root;
@@ -300,24 +278,6 @@ impl RbwPaths {
         }
         Ok(())
     }
-}
-
-fn migrate_default_root(root: PathBuf, legacy_root: PathBuf) -> PathBuf {
-    if root.exists() || !legacy_root.is_dir() {
-        return root;
-    }
-    match std::fs::rename(&legacy_root, &root) {
-        Ok(()) => root,
-        Err(_) => default_root_after_failed_rename(root, legacy_root),
-    }
-}
-
-fn default_root_after_failed_rename(root: PathBuf, legacy_root: PathBuf) -> PathBuf {
-    // Snapshot, settings, and utility commands can resolve paths concurrently
-    // on first launch. If another caller completed the rename after our
-    // preflight check, converge on the migrated root instead of recreating and
-    // splitting state across the legacy directory.
-    if root.is_dir() { root } else { legacy_root }
 }
 
 fn ensure_qa_root_isolated(qa_root: &Path, premium_root: &Path) -> Result<(), PlatformError> {
@@ -472,7 +432,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_legacy_java_version() {
+    fn parses_java_8_version() {
         assert_eq!(parse_java_major("1.8.0_74").unwrap(), 8);
     }
 
@@ -484,7 +444,7 @@ mod tests {
     #[test]
     fn creates_isolated_layout() {
         let temp = tempfile::tempdir().unwrap();
-        let paths = RbwPaths::from_root(temp.path().join("rbw")).unwrap();
+        let paths = OpusPaths::from_root(temp.path().join("opus")).unwrap();
         paths.create_all().unwrap();
 
         assert!(paths.minecraft.is_dir());
@@ -495,7 +455,7 @@ mod tests {
     #[test]
     fn rejects_a_qa_root_that_overlaps_premium_storage() {
         let temp = tempfile::tempdir().unwrap();
-        let root = temp.path().join("rbw");
+        let root = temp.path().join("opus");
         assert!(ensure_qa_root_isolated(&root, &root).is_err());
         assert!(ensure_qa_root_isolated(&temp.path().join("qa"), &root).is_ok());
     }
@@ -510,34 +470,6 @@ mod tests {
         assert!(ensure_ui_preview_root_isolated(&premium, &premium, &qa).is_err());
         assert!(ensure_ui_preview_root_isolated(&qa, &premium, &qa).is_err());
         assert!(ensure_ui_preview_root_isolated(&preview, &premium, &qa).is_ok());
-    }
-
-    #[test]
-    fn migrates_a_legacy_default_root_without_copying_data() {
-        let temp = tempfile::tempdir().unwrap();
-        let legacy = temp.path().join(".rbw-client");
-        let opus = temp.path().join(".opus-launcher");
-        std::fs::create_dir_all(&legacy).unwrap();
-        std::fs::write(legacy.join("accounts-v1.json"), b"legacy").unwrap();
-
-        let resolved = migrate_default_root(opus.clone(), legacy.clone());
-
-        assert_eq!(resolved, opus);
-        assert!(resolved.join("accounts-v1.json").is_file());
-        assert!(!legacy.exists());
-    }
-
-    #[test]
-    fn failed_concurrent_migration_converges_on_the_new_root() {
-        let temp = tempfile::tempdir().unwrap();
-        let legacy = temp.path().join(".rbw-client");
-        let opus = temp.path().join(".opus-launcher");
-        std::fs::create_dir_all(&legacy).unwrap();
-        std::fs::create_dir_all(&opus).unwrap();
-
-        let resolved = default_root_after_failed_rename(opus.clone(), legacy);
-
-        assert_eq!(resolved, opus);
     }
 
     #[test]

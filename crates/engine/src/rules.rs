@@ -1,5 +1,5 @@
 use crate::{Library, RuleAction};
-use rbw_platform::{Architecture, Platform};
+use opus_platform::{Architecture, Platform};
 use regex::Regex;
 
 #[derive(Debug, Clone)]
@@ -74,7 +74,7 @@ fn architecture_matches(rule: &str, architecture: Architecture) -> bool {
 mod tests {
     use super::*;
     use crate::{LibraryDownloads, Rule, RuleOs};
-    use rbw_platform::OperatingSystem;
+    use opus_platform::OperatingSystem;
     use std::collections::BTreeMap;
 
     fn library(rules: Vec<Rule>) -> Library {

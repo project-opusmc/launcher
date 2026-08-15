@@ -22,7 +22,7 @@ developer-test-profile = []
 qa-edition = []
 # Uses the QA/offline runtime surface but resolves a third, isolated data root.
 # This feature exists only for the temporary in-game UI migration preview.
-ui-preview = ["qa-edition", "rbw-runtime/ui-preview-artifact"]
+ui-preview = ["qa-edition", "opus-engine/ui-preview-artifact"]
 
 [[bin]]
 name = "opus-launcher"
@@ -33,9 +33,9 @@ tauri-build.workspace = true
 
 [dependencies]
 open.workspace = true
-rbw-auth = { path = "../../crates/auth" }
-rbw-platform = { path = "../../crates/platform" }
-rbw-runtime = { path = "../../crates/engine" }
+opus-auth = { path = "../../crates/auth" }
+opus-platform = { path = "../../crates/platform" }
+opus-engine = { path = "../../crates/engine" }
 serde.workspace = true
 serde_json.workspace = true
 tauri.workspace = true

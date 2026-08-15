@@ -2,9 +2,9 @@
 /desktop/node_modules/
 /desktop/dist/
 /desktop/src-tauri/target/
-/desktop/src-tauri/binaries/rbw-game-runner-*
-/desktop/src-tauri/resources/bin/rbw-game-runner-*
-/desktop/src-tauri/resources/game-app/Contents/MacOS/Ranked Bedwars Client
+/desktop/src-tauri/binaries/opus-game-runner-*
+/desktop/src-tauri/resources/bin/opus-game-runner-*
+/desktop/src-tauri/resources/game-app/Contents/MacOS/Opus Client
 /desktop/src-tauri/resources/bootstrap/*.jar
 /desktop/src-tauri/resources/bootstrap/runtime-*.json
 !/desktop/src-tauri/resources/bootstrap/.gitkeep
@@ -22,4 +22,6 @@
 *.iml
 
 # Local runtime data must never be committed.
-/.rbw-client/
+/.opus-launcher/
+/.opus-launcher-qa/
+/.opus-launcher-ui-preview/

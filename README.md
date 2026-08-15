@@ -1,88 +1,93 @@
-# Opus
+# Opus Launcher
 
-Opus consists of **Opus Launcher**, a native desktop launcher, and **Opus Client**,
-the controlled Forge + OptiFine Minecraft Java Edition 1.8.9 runtime it starts.
-Launcher state, accounts, isolated instances, and managed game files remain
-separate from the normal `.minecraft` installation.
+Opus Launcher is the native desktop launcher for OPUS. It owns account and
+profile management, installation and repair, platform integration, runtime
+artifact verification, isolated game instances, and Minecraft process
+lifecycle. Java code that runs inside Minecraft belongs to the separate
+`project-opusmc/runtime` repository.
 
-Working on this repository? Start at [docs/README.md](docs/README.md) for the
-architecture, module map, IPC contract, and invariants.
+This repository is independently buildable. In product releases it is pinned
+as the `launcher/` submodule of the `project-opusmc/opus` superproject.
 
-## Desktop launcher
+## Workspace
 
-Build the production launcher with Microsoft authentication, ownership
-verification, installation/repair, and real Minecraft launch support:
-
-```bash
-npm --prefix desktop install
-npm --prefix desktop run tauri:build:premium
-open "target/release/bundle/macos/Opus Launcher.app"
+```text
+launcher/
+|- crates/auth/       Microsoft and Minecraft authentication
+|- crates/platform/   OS paths, Java discovery, and process integration
+|- crates/engine/     install, verify, repair, and launch planning
+|- crates/cli/        diagnostics and command-line operations
+|- desktop/           React TUI and Tauri desktop application
+|- docs/
+`- scripts/
 ```
 
-On macOS, Opus Launcher starts the managed game through the bundled
-`Opus Client.app` LaunchServices stub. The stub immediately executes the pinned
-Java runtime while preserving a foreground application identity.
+The graphical TUI supports keyboard and mouse input. `Shift + Arrow` changes
+the focused pane; plain arrow keys navigate within the current pane.
 
-The launcher uses a pane-based graphical TUI with keyboard and mouse support.
-`Shift + Arrow` moves between panes; plain arrow keys navigate within the
-focused pane.
+## Runtime Artifacts
 
-## Accounts and profiles
+Launcher consumes the immutable OPUS Runtime contract:
 
-The unified account catalog supports:
-
-- multiple Microsoft accounts, each displayed with its verified Minecraft
-  profile name and an `[OFFICIAL]` or `[PREMIUM]` tag;
-- multiple offline profiles displayed as `[UNOFFICIAL]`;
-- explicit identity selection before launch;
-- concurrent Minecraft instances for different identities;
-- one isolated game directory per Minecraft UUID.
-
-Microsoft passwords and authorization codes never enter Opus Launcher. Sign-in
-opens Microsoft's official page in the system browser, uses PKCE with a bounded
-localhost callback, and stores only the refresh credential in the operating
-system keychain.
-
-The default data root is `~/.opus-launcher` on macOS/Linux or
-`AppData/Local/OpusLauncher` on Windows. Existing `.rbw-client` data and legacy
-Keychain entries are migrated automatically. `OPUS_HOME` overrides the normal
-root; the legacy `RBW_HOME` alias remains accepted during migration.
-
-## QA lane
-
-The separate QA bundle remains an internal debug artifact, not a second user
-product:
-
-```bash
-npm --prefix desktop run tauri:build:qa
+```text
+runtime-manifest.json
+runtime-checksums.json
+artifacts/opus-bootstrap-<version>.jar
+artifacts/opus-runtime-legacy-1.8.9-<version>.jar
+artifacts/opus-client-legacy-1.8.9-<version>.jar
 ```
 
-It is written to `target/debug/bundle/macos/Opus Launcher QA.app` and uses an
-isolated data root. User-facing offline profiles belong in the unified Opus
-Launcher account list and carry the `[UNOFFICIAL]` tag.
-
-## Microsoft application registration
-
-Opus Launcher includes its first-party public Microsoft application Client ID.
-Minecraft Services must also approve that exact ID through Mojang's official
-[AppID Review form](https://aka.ms/mce-reviewappid). An Entra registration alone
-is not sufficient, and end users must never substitute another launcher's ID.
-
-For CLI-only development, `OPUS_MICROSOFT_CLIENT_ID` is the preferred override;
-`RBW_MICROSOFT_CLIENT_ID` remains a compatibility alias.
-
-## CLI diagnostics
+Set `OPUS_RUNTIME_ARTIFACT_DIR` to a verified Runtime output directory before a
+desktop build. In the superproject this staging is handled by the root build
+scripts.
 
 ```bash
-./game/gradlew -p game test prepareBootstrap
-cargo run -p rbw-launcher -- doctor
-cargo run -p rbw-launcher -- install
-cargo run -p rbw-launcher -- import-optifine /path/to/OptiFine_1.8.9_HD_U_M5.jar
-cargo run -p rbw-launcher -- launch --offline --dry-run
+OPUS_RUNTIME_ARTIFACT_DIR=/path/to/runtime/build/runtime \
+  ./scripts/prepare-desktop-assets.sh
 ```
 
-An actual macOS CLI game launch is deliberately blocked; use the packaged
-`Opus Launcher.app` so LaunchServices can preserve the game app identity.
-Mojang and Forge artifacts are verified against locked contracts. OptiFine is
-provided locally by the user and is never downloaded, bundled, or redistributed
-by this repository.
+OptiFine is never downloaded, bundled, or redistributed by OPUS. The user must
+import the exact supported local JAR, which Launcher verifies before copying it
+into an isolated instance.
+
+## Build And Check
+
+Requirements: Rust 1.92, Node.js 24, npm, and the native prerequisites required
+by Tauri 2.
+
+```bash
+npm ci --prefix desktop
+./scripts/check.sh
+```
+
+Build the Premium or internal QA macOS bundle with:
+
+```bash
+OPUS_RUNTIME_ARTIFACT_DIR=/path/to/runtime/build/runtime \
+  npm --prefix desktop run tauri:build:premium
+
+OPUS_RUNTIME_ARTIFACT_DIR=/path/to/runtime/build/runtime \
+  npm --prefix desktop run tauri:build:qa
+```
+
+## Accounts And Instances
+
+The unified catalog supports multiple Microsoft accounts and multiple offline
+profiles. Microsoft identities display their verified Minecraft profile name
+with `[OFFICIAL]` or `[PREMIUM]`; offline profiles display `[UNOFFICIAL]`.
+Different identities can launch concurrently, while duplicate launches for the
+same identity are rejected.
+
+Microsoft passwords and authorization codes never enter Launcher. Browser
+sign-in uses PKCE and a bounded localhost callback; refresh credentials are
+stored in the operating-system keychain.
+
+Default data roots are `~/.opus-launcher`, `~/.opus-launcher-qa`, and
+`~/.opus-launcher-ui-preview` on macOS/Linux, with corresponding
+`OpusLauncher*` directories below Local App Data on Windows. `OPUS_HOME`,
+`OPUS_QA_HOME`, and `OPUS_UI_PREVIEW_HOME` override their own isolated lanes.
+Launcher does not import, delete, or rewrite data belonging to earlier products.
+
+## License
+
+Copyright (c) 2026 Polydevs. All rights reserved. See [LICENSE](LICENSE).

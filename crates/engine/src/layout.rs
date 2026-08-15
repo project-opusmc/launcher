@@ -1,15 +1,15 @@
 use crate::{FORGE_OPTIFINE_FILE_NAME, FORGE_PROFILE_ID, MINECRAFT_VERSION};
-use rbw_platform::RbwPaths;
+use opus_platform::OpusPaths;
 use std::path::{Component, Path, PathBuf};
 use thiserror::Error;
 
 #[derive(Debug, Clone)]
 pub struct MinecraftLayout {
-    pub paths: RbwPaths,
+    pub paths: OpusPaths,
 }
 
 impl MinecraftLayout {
-    pub fn new(paths: RbwPaths) -> Self {
+    pub fn new(paths: OpusPaths) -> Self {
         Self { paths }
     }
 

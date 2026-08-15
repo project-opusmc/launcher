@@ -15,7 +15,6 @@ use thiserror::Error;
 use url::Url;
 
 pub const MICROSOFT_CLIENT_ID_ENV: &str = "OPUS_MICROSOFT_CLIENT_ID";
-pub const LEGACY_MICROSOFT_CLIENT_ID_ENV: &str = "RBW_MICROSOFT_CLIENT_ID";
 const OAUTH_SCOPE: &str = "XboxLive.signin offline_access";
 const AUTHORIZATION_URL: &str = "https://login.microsoftonline.com/consumers/oauth2/v2.0/authorize";
 const DEVICE_CODE_URL: &str = "https://login.microsoftonline.com/consumers/oauth2/v2.0/devicecode";
@@ -28,8 +27,7 @@ const MINECRAFT_INVALID_APP_REGISTRATION_MESSAGE: &str =
     "Invalid app registration, see https://aka.ms/AppRegInfo for more information";
 const MINECRAFT_ENTITLEMENTS_URL: &str = "https://api.minecraftservices.com/entitlements/mcstore";
 const MINECRAFT_PROFILE_URL: &str = "https://api.minecraftservices.com/minecraft/profile";
-const KEYRING_SERVICE: &str = "dev.opus.launcher.microsoft.refresh-token";
-const LEGACY_KEYRING_SERVICE: &str = "dev.rbw.client.microsoft.refresh-token";
+const KEYRING_SERVICE: &str = "org.polydevs.opusmc.launcher.microsoft.refresh-token";
 const KEYRING_ACCOUNT: &str = "default";
 const KEYRING_PROFILE_PREFIX: &str = "profile-";
 const LOOPBACK_CALLBACK_HOST: &str = "localhost";
@@ -211,7 +209,6 @@ pub struct MicrosoftAuthenticator {
 impl MicrosoftAuthenticator {
     pub fn from_environment() -> Result<Self, AuthError> {
         let client_id = std::env::var(MICROSOFT_CLIENT_ID_ENV)
-            .or_else(|_| std::env::var(LEGACY_MICROSOFT_CLIENT_ID_ENV))
             .map_err(|_| AuthError::MissingClientId(MICROSOFT_CLIENT_ID_ENV.to_owned()))?;
         Self::new(client_id)
     }
@@ -514,7 +511,6 @@ impl MicrosoftAuthenticator {
 
 pub struct RefreshTokenStore {
     entry: keyring::Entry,
-    legacy_entry: keyring::Entry,
 }
 
 impl RefreshTokenStore {
@@ -535,7 +531,6 @@ impl RefreshTokenStore {
     fn for_keyring_account(account: &str) -> Result<Self, AuthError> {
         Ok(Self {
             entry: keyring::Entry::new(KEYRING_SERVICE, account)?,
-            legacy_entry: keyring::Entry::new(LEGACY_KEYRING_SERVICE, account)?,
         })
     }
 
@@ -550,31 +545,18 @@ impl RefreshTokenStore {
     pub fn load(&self) -> Result<Option<String>, AuthError> {
         match self.entry.get_password() {
             Ok(token) => Ok(Some(token)),
-            Err(keyring::Error::NoEntry) => match self.legacy_entry.get_password() {
-                Ok(token) => {
-                    self.entry.set_password(&token)?;
-                    let _ = self.legacy_entry.delete_credential();
-                    Ok(Some(token))
-                }
-                Err(keyring::Error::NoEntry) => Ok(None),
-                Err(error) => Err(error.into()),
-            },
+            Err(keyring::Error::NoEntry) => Ok(None),
             Err(error) => Err(error.into()),
         }
     }
 
     pub fn delete(&self) -> Result<bool, AuthError> {
-        let primary_deleted = match self.entry.delete_credential() {
+        let deleted = match self.entry.delete_credential() {
             Ok(()) => true,
             Err(keyring::Error::NoEntry) => false,
             Err(error) => return Err(error.into()),
         };
-        let legacy_deleted = match self.legacy_entry.delete_credential() {
-            Ok(()) => true,
-            Err(keyring::Error::NoEntry) => false,
-            Err(error) => return Err(error.into()),
-        };
-        Ok(primary_deleted || legacy_deleted)
+        Ok(deleted)
     }
 }
 

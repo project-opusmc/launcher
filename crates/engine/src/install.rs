@@ -9,8 +9,8 @@ use crate::{
     safe_join, verify_file,
 };
 use fs2::FileExt;
+use opus_platform::{Architecture, JavaProbe, Platform};
 use rayon::prelude::*;
-use rbw_platform::{Architecture, JavaProbe, Platform};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufReader, Write};
@@ -833,8 +833,8 @@ impl Installer {
         }
 
         let java_home = match self.platform.os {
-            rbw_platform::OperatingSystem::MacOs => runtime_root.join("jre.bundle/Contents/Home"),
-            rbw_platform::OperatingSystem::Windows | rbw_platform::OperatingSystem::Linux => {
+            opus_platform::OperatingSystem::MacOs => runtime_root.join("jre.bundle/Contents/Home"),
+            opus_platform::OperatingSystem::Windows | opus_platform::OperatingSystem::Linux => {
                 runtime_root
             }
         };
@@ -947,8 +947,8 @@ impl Installer {
         }
 
         let java_home = match self.platform.os {
-            rbw_platform::OperatingSystem::MacOs => runtime_root.join("jre.bundle/Contents/Home"),
-            rbw_platform::OperatingSystem::Windows | rbw_platform::OperatingSystem::Linux => {
+            opus_platform::OperatingSystem::MacOs => runtime_root.join("jre.bundle/Contents/Home"),
+            opus_platform::OperatingSystem::Windows | opus_platform::OperatingSystem::Linux => {
                 runtime_root.clone()
             }
         };
@@ -1262,7 +1262,7 @@ pub enum InstallError {
     #[error(transparent)]
     ForgeLock(#[from] crate::ForgeLockError),
     #[error(transparent)]
-    Platform(#[from] rbw_platform::PlatformError),
+    Platform(#[from] opus_platform::PlatformError),
     #[error(transparent)]
     UnsafePath(#[from] UnsafeRelativePath),
     #[error("filesystem operation failed")]
@@ -1327,7 +1327,7 @@ pub enum InstallError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rbw_platform::{Architecture, OperatingSystem, RbwPaths};
+    use opus_platform::{Architecture, OperatingSystem, OpusPaths};
     use std::sync::Mutex;
 
     #[test]
@@ -1419,7 +1419,7 @@ mod tests {
             host_arch: Architecture::Aarch64,
             game_arch: Architecture::X86_64,
         };
-        let paths = RbwPaths::from_root(temp.path().join("rbw")).unwrap();
+        let paths = OpusPaths::from_root(temp.path().join("opus")).unwrap();
         let installer = Installer::new(MinecraftLayout::new(paths), platform).unwrap();
 
         let mut state = valid_test_state();
