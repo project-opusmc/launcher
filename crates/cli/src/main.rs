@@ -200,7 +200,7 @@ struct ForgeBootstrapArtifacts {
 fn forge_bootstrap_artifacts(directory: &Path) -> Result<ForgeBootstrapArtifacts> {
     if !directory.is_dir() {
         anyhow::bail!(
-            "Forge bootstrap artifacts are missing at {}; run ./game/gradlew -p game prepareBootstrap",
+            "OPUS Runtime artifacts are missing at {}; stage a verified prepareRuntime output",
             directory.display()
         );
     }
@@ -223,15 +223,15 @@ fn forge_bootstrap_artifacts(directory: &Path) -> Result<ForgeBootstrapArtifacts
             .file_name()
             .and_then(|value| value.to_str())
             .ok_or_else(|| anyhow::anyhow!("Forge bootstrap artifact has an invalid name"))?;
-        if name.starts_with("bootstrap-") && name.ends_with(".jar") {
+        if name.starts_with("opus-bootstrap-") && name.ends_with(".jar") {
             if bootstrap_jar.replace(path).is_some() {
                 anyhow::bail!("bootstrap directory contains multiple bootstrap JARs");
             }
-        } else if name.starts_with("rbw-forge-coremod-") && name.ends_with(".jar") {
+        } else if name.starts_with("opus-runtime-legacy-1.8.9-") && name.ends_with(".jar") {
             if coremod_jar.replace(path).is_some() {
                 anyhow::bail!("bootstrap directory contains multiple Forge coremod JARs");
             }
-        } else if name.starts_with("rbw-forge-client-") && name.ends_with(".jar") {
+        } else if name.starts_with("opus-client-legacy-1.8.9-") && name.ends_with(".jar") {
             if client_mod_jar.replace(path).is_some() {
                 anyhow::bail!("bootstrap directory contains multiple Forge client-mod JARs");
             }

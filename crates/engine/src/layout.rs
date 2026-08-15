@@ -38,7 +38,7 @@ impl MinecraftLayout {
     }
 
     pub fn forge_profile_marker(&self) -> PathBuf {
-        self.forge_version_dir().join("rbw-forge-profile.json")
+        self.forge_version_dir().join("opus-forge-profile.json")
     }
 
     pub fn install_state(&self) -> PathBuf {

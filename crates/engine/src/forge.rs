@@ -11,8 +11,8 @@ pub const FORGE_OPTIFINE_FILE_NAME: &str = "OptiFine_1.8.9_HD_U_M5.jar";
 pub const FORGE_COREMOD_SHA1: &str = "689ad5b76e1749e2be8ce91488b3a26669aba079";
 pub const FORGE_COREMOD_SIZE: u64 = 101_474;
 /// The reviewed typed Forge client mod staged by `prepareBootstrap`.
-pub const FORGE_CLIENT_MOD_SHA1: &str = "b5edc2d61edb6d116984859f283407d7940f675e";
-pub const FORGE_CLIENT_MOD_SIZE: u64 = 255_915;
+pub const FORGE_CLIENT_MOD_SHA1: &str = "023ebd7d7520ef176529141ddb377f1740f7bf9d";
+pub const FORGE_CLIENT_MOD_SIZE: u64 = 255_737;
 
 const FORGE_LOCK_JSON: &str = include_str!("../runtime-lock/forge-1.8.9-11.15.1.2318.lock.json");
 
@@ -169,8 +169,8 @@ mod tests {
         assert_eq!(FORGE_COREMOD_SIZE, 101_474);
         assert_eq!(
             FORGE_CLIENT_MOD_SHA1,
-            "b5edc2d61edb6d116984859f283407d7940f675e"
+            "023ebd7d7520ef176529141ddb377f1740f7bf9d"
         );
-        assert_eq!(FORGE_CLIENT_MOD_SIZE, 255_915);
+        assert_eq!(FORGE_CLIENT_MOD_SIZE, 255_737);
     }
 }

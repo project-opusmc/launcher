@@ -548,7 +548,7 @@ fn validate_bootstrap_classpath(classpath: &[PathBuf]) -> Result<(), LaunchError
     let has_bootstrap = classpath.iter().any(|path| {
         path.file_name()
             .and_then(OsStr::to_str)
-            .map(|name| name.starts_with("bootstrap-") && name.ends_with(".jar"))
+            .map(|name| name.starts_with("opus-bootstrap-") && name.ends_with(".jar"))
             .unwrap_or(false)
     });
     if !has_bootstrap {
@@ -567,7 +567,7 @@ fn canonicalize_single_bootstrap_jar(path: &Path) -> Result<PathBuf, LaunchError
         return Err(LaunchError::MissingBootstrapEntry(path.to_path_buf()));
     }
     let name = path.file_name().and_then(OsStr::to_str).unwrap_or_default();
-    if !name.starts_with("bootstrap-") || !name.ends_with(".jar") {
+    if !name.starts_with("opus-bootstrap-") || !name.ends_with(".jar") {
         return Err(LaunchError::MissingBootstrapJar);
     }
     fs::canonicalize(path).map_err(|source| LaunchError::CanonicalizeClasspath {
@@ -629,8 +629,8 @@ fn stage_forge_coremod(
     // (and `mods/<mc-version>`), not the newer `coremods` convention.
     let mods_directory = layout.mods_dir();
     fs::create_dir_all(&mods_directory)?;
-    let destination = mods_directory.join("rbw-forge-coremod.jar");
-    let temporary = mods_directory.join(format!(".rbw-forge-coremod.part-{}", std::process::id()));
+    let destination = mods_directory.join("opus-runtime-legacy-1.8.9.jar");
+    let temporary = mods_directory.join(format!(".opus-runtime.part-{}", std::process::id()));
     if temporary.exists() {
         fs::remove_file(&temporary)?;
     }
@@ -655,7 +655,7 @@ fn forge_coremod_spec() -> crate::DownloadSpec {
     crate::DownloadSpec {
         // This is not a download endpoint: the checked-in release artifact is
         // verified locally before staging beside the managed OptiFine mod.
-        url: "https://rbw.invalid/release/rbw-forge-coremod.jar".to_owned(),
+        url: "https://opus.invalid/release/opus-runtime-legacy-1.8.9.jar".to_owned(),
         sha1: FORGE_COREMOD_SHA1.to_owned(),
         size: Some(FORGE_COREMOD_SIZE),
     }
@@ -665,7 +665,7 @@ fn forge_client_mod_spec() -> crate::DownloadSpec {
     crate::DownloadSpec {
         // This is not a download endpoint: the checked-in release artifact is
         // verified locally before staging beside the managed Forge coremod.
-        url: "https://rbw.invalid/release/rbw-forge-client.jar".to_owned(),
+        url: "https://opus.invalid/release/opus-client-legacy-1.8.9.jar".to_owned(),
         sha1: FORGE_CLIENT_MOD_SHA1.to_owned(),
         size: Some(FORGE_CLIENT_MOD_SIZE),
     }
@@ -705,8 +705,8 @@ fn stage_forge_client_mod(
     validate_forge_client_mod(source, spec)?;
     let mods_directory = layout.mods_dir();
     fs::create_dir_all(&mods_directory)?;
-    let destination = mods_directory.join("rbw-forge-client.jar");
-    let temporary = mods_directory.join(format!(".rbw-forge-client.part-{}", std::process::id()));
+    let destination = mods_directory.join("opus-client-legacy-1.8.9.jar");
+    let temporary = mods_directory.join(format!(".opus-client.part-{}", std::process::id()));
     if temporary.exists() {
         fs::remove_file(&temporary)?;
     }
@@ -1529,7 +1529,7 @@ pub enum LaunchError {
     InvalidClasspath(String),
     #[error("bootstrap classpath is empty")]
     EmptyBootstrapClasspath,
-    #[error("bootstrap classpath does not contain bootstrap-*.jar")]
+    #[error("bootstrap classpath does not contain opus-bootstrap-*.jar")]
     MissingBootstrapJar,
     #[error("bootstrap classpath entry does not exist: {path}", path = .0.display())]
     MissingBootstrapEntry(PathBuf),
@@ -1648,13 +1648,11 @@ mod tests {
             let layout = MinecraftLayout::new(
                 rbw_platform::RbwPaths::from_root(temporary.path().join("rbw")).unwrap(),
             );
-            let bootstrap_jar = temporary.path().join("bootstrap-0.0.1.jar");
+            let bootstrap_jar = temporary.path().join("opus-bootstrap-0.0.1.jar");
             let forge_classpath = temporary.path().join("forge-runtime.jar");
             let vanilla_classpath = temporary.path().join("vanilla-client.jar");
-            let coremod_jar = temporary.path().join("rbw-forge-coremod-0.0.1.jar");
-            let client_mod_jar = temporary
-                .path()
-                .join("rbw-forge-client-0.0.1-preview.3.jar");
+            let coremod_jar = temporary.path().join("opus-runtime-legacy-1.8.9-0.0.1.jar");
+            let client_mod_jar = temporary.path().join("opus-client-legacy-1.8.9-0.0.1.jar");
             let native_archive = temporary.path().join("natives.jar");
             fs::write(&bootstrap_jar, b"bootstrap fixture").unwrap();
             fs::write(&forge_classpath, b"forge fixture").unwrap();
@@ -1980,7 +1978,7 @@ mod tests {
     #[test]
     fn canonicalizes_relative_child_process_classpath() {
         let temp = tempfile::tempdir_in(".").unwrap();
-        let relative = temp.path().join("bootstrap-0.0.1.jar");
+        let relative = temp.path().join("opus-bootstrap-0.0.1.jar");
         File::create(&relative).unwrap().write_all(b"jar").unwrap();
         let canonical = canonicalize_classpath(std::slice::from_ref(&relative)).unwrap();
         assert!(canonical[0].is_absolute());
@@ -2085,14 +2083,20 @@ mod tests {
         assert!(!classpath.contains(&fs::canonicalize(&fixture.coremod_jar).unwrap()));
         assert!(!classpath.contains(&fs::canonicalize(&fixture.client_mod_jar).unwrap()));
 
-        let staged_coremod = fixture.layout.mods_dir().join("rbw-forge-coremod.jar");
+        let staged_coremod = fixture
+            .layout
+            .mods_dir()
+            .join("opus-runtime-legacy-1.8.9.jar");
         assert_eq!(
             fs::read(&staged_coremod).unwrap(),
             fs::read(&fixture.coremod_jar).unwrap()
         );
         validate_forge_coremod(&staged_coremod, &fixture.contract.coremod).unwrap();
 
-        let staged_client_mod = fixture.layout.mods_dir().join("rbw-forge-client.jar");
+        let staged_client_mod = fixture
+            .layout
+            .mods_dir()
+            .join("opus-client-legacy-1.8.9.jar");
         assert_eq!(
             fs::read(&staged_client_mod).unwrap(),
             fs::read(&fixture.client_mod_jar).unwrap()

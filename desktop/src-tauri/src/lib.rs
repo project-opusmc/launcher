@@ -1550,17 +1550,17 @@ fn forge_bootstrap_artifacts(directory: &Path) -> Result<ForgeBootstrapArtifacts
                     path.display()
                 )
             })?;
-        if name.starts_with("bootstrap-") && name.ends_with(".jar") {
+        if name.starts_with("opus-bootstrap-") && name.ends_with(".jar") {
             if bootstrap_jar.replace(path).is_some() {
                 return Err("Opus bootstrap directory contains multiple bootstrap JARs".to_owned());
             }
-        } else if name.starts_with("rbw-forge-coremod-") && name.ends_with(".jar") {
+        } else if name.starts_with("opus-runtime-legacy-1.8.9-") && name.ends_with(".jar") {
             if coremod_jar.replace(path).is_some() {
                 return Err(
                     "Opus bootstrap directory contains multiple Forge coremod JARs".to_owned(),
                 );
             }
-        } else if name.starts_with("rbw-forge-client-") && name.ends_with(".jar") {
+        } else if name.starts_with("opus-client-legacy-1.8.9-") && name.ends_with(".jar") {
             if client_mod_jar.replace(path).is_some() {
                 return Err(
                     "Opus bootstrap directory contains multiple Forge client-mod JARs".to_owned(),
