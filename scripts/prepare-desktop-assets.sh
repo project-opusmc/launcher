@@ -16,7 +16,7 @@ verify_artifact() {
   local expected_sha1="$2"
   local expected_size="$3"
   if [[ ! -f "${artifact_path}" ]]; then
-    echo "Missing reviewed RBW artifact: ${artifact_path}" >&2
+    echo "Missing reviewed Opus artifact: ${artifact_path}" >&2
     exit 1
   fi
   local actual_sha1
@@ -24,7 +24,7 @@ verify_artifact() {
   actual_sha1="$(shasum -a 1 "${artifact_path}" | cut -d ' ' -f 1)"
   actual_size="$(wc -c < "${artifact_path}" | tr -d '[:space:]')"
   if [[ "${actual_sha1}" != "${expected_sha1}" || "${actual_size}" != "${expected_size}" ]]; then
-    echo "Reviewed RBW artifact changed: ${artifact_path}" >&2
+    echo "Reviewed Opus artifact changed: ${artifact_path}" >&2
     echo "expected SHA-1=${expected_sha1} size=${expected_size}" >&2
     echo "actual   SHA-1=${actual_sha1} size=${actual_size}" >&2
     exit 1
@@ -35,14 +35,14 @@ verify_artifact() {
 # Updating either artifact requires an intentional lock review in forge.rs.
 verify_artifact \
   "${bootstrap_destination}/rbw-forge-coremod-0.0.1.jar" \
-  "5d4e44450083b28559d067ccf7f53ab2b73b9984" \
-  "101444"
+  "689ad5b76e1749e2be8ce91488b3a26669aba079" \
+  "101474"
 verify_artifact \
   "${bootstrap_destination}/rbw-forge-client-0.0.1-preview.3.jar" \
-  "07b137286bf10e4459405a775b36374730e597c9" \
-  "335621"
+  "b5edc2d61edb6d116984859f283407d7940f675e" \
+  "255915"
 
 brand_destination="${rbw_root}/desktop/src-tauri/resources/brand"
 mkdir -p "${brand_destination}"
-cp "${rbw_root}/desktop/public/brand/rbw-wordmark-transparent.png" \
-  "${brand_destination}/rbw-wordmark-transparent.png"
+cp "${rbw_root}/desktop/public/brand/opus-wordmark-transparent.png" \
+  "${brand_destination}/opus-wordmark-transparent.png"

@@ -2,7 +2,7 @@
 
 ## User-facing flow
 
-1. Open **RBW Client**.
+1. Open **Opus Launcher**.
 2. Dashboard shows account, locked Forge 1.8.9 runtime, OptiFine import, and
    Java runtime health.
 3. Open **Account** and select **Sign in with Microsoft**. RBW opens

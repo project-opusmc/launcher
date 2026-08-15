@@ -44,11 +44,11 @@ const SETTINGS_FILE: &str = "launcher-settings-v1.json";
 const UTILITY_SETTINGS_FILE: &str = "utility-settings-v1.json";
 const UTILITY_SETTINGS_SCHEMA_VERSION: u8 = 1;
 const QA_PROFILE_FILE: &str = "offline-profile-v1.json";
-/// Public identifier of RBW's Microsoft Entra application. Desktop clients are
+/// Public identifier of Opus's Microsoft Entra application. Desktop clients are
 /// public OAuth clients, so this identifier is safe to distribute; refresh
 /// credentials remain in the operating-system keychain.
 #[cfg(not(feature = "qa-edition"))]
-const RBW_MICROSOFT_CLIENT_ID: &str = "352b876e-6d3b-4cb8-9095-82957a752784";
+const OPUS_MICROSOFT_CLIENT_ID: &str = "352b876e-6d3b-4cb8-9095-82957a752784";
 
 #[derive(Default)]
 struct AppState {
@@ -574,7 +574,7 @@ struct InstallResult {
     cached_files: usize,
 }
 
-/// Result of importing a user-owned OptiFine JAR into the isolated RBW game
+/// Result of importing a user-owned OptiFine JAR into the isolated Opus game
 /// directory. The runtime verifies the immutable checksum before any copy is
 /// made; the original source file is never modified or removed.
 #[derive(Debug, Serialize)]
@@ -667,6 +667,9 @@ fn snapshot_blocking(
     let data_directory = paths.root.display().to_string();
     #[cfg(not(feature = "qa-edition"))]
     import_legacy_demo_profile(&paths)?;
+    accounts::migrate_metadata(&paths)?;
+    #[cfg(not(feature = "qa-edition"))]
+    migrate_legacy_microsoft_account(&paths);
     let account_view = accounts::load(&paths)?;
     let account_summaries = account_view.summaries();
     let selected_account_id = accounts::selected_id(&account_view);
@@ -767,7 +770,7 @@ async fn install_minecraft(
 }
 
 /// Imports the exact OptiFine build selected by the locked Forge profile.
-/// This deliberately accepts a local path only: RBW does not download, bundle,
+/// This deliberately accepts a local path only: Opus does not download, bundle,
 /// or redistribute OptiFine.
 #[tauri::command]
 async fn import_optifine(
@@ -808,7 +811,7 @@ fn load_settings() -> Result<LauncherSettings, String> {
         return Ok(LauncherSettings::default());
     }
     let bytes = fs::read(&path).map_err(display_error)?;
-    serde_json::from_slice(&bytes).map_err(|_| "RBW settings file is invalid".to_owned())
+    serde_json::from_slice(&bytes).map_err(|_| "Opus settings file is invalid".to_owned())
 }
 
 #[tauri::command]
@@ -912,8 +915,9 @@ fn complete_microsoft_login(
         .begin_browser_authorization()
         .map_err(display_error)?;
     cancellation.ensure_not_cancelled().map_err(display_error)?;
-    open::that(authorization.authorization_url())
-        .map_err(|_| "RBW could not open Microsoft sign-in in your default browser".to_owned())?;
+    open::that(authorization.authorization_url()).map_err(|_| {
+        "Opus Launcher could not open Microsoft sign-in in your default browser".to_owned()
+    })?;
     let account = authenticator
         .complete_browser_authorization(authorization, cancellation)
         .map_err(display_error)?;
@@ -1097,7 +1101,7 @@ fn utility_settings_path() -> Result<PathBuf, String> {
 }
 
 /// Resolve storage for the active launcher flavor. The QA flavor never uses
-/// `RbwPaths::discover`, which is the Premium root and honors `RBW_HOME`.
+/// `RbwPaths::discover`, which is the Premium root and honors `OPUS_HOME`.
 fn launcher_paths() -> Result<RbwPaths, String> {
     #[cfg(feature = "ui-preview")]
     {
@@ -1127,7 +1131,7 @@ fn load_utility_settings() -> Result<UtilitySettings, String> {
     }
     let bytes = fs::read(&path).map_err(display_error)?;
     let settings: UtilitySettings = serde_json::from_slice(&bytes)
-        .map_err(|_| "RBW utility settings file is invalid".to_owned())?;
+        .map_err(|_| "Opus utility settings file is invalid".to_owned())?;
     let (settings, needs_migration) = normalize_utility_settings(settings)?;
     if needs_migration {
         write_utility_settings_atomic(&path, &settings)?;
@@ -1162,13 +1166,13 @@ fn normalize_utility_settings(
         settings.utilities.entry(utility_id).or_insert(preference);
     }
     validate_utility_settings(&settings)
-        .map_err(|_| "RBW utility settings file is invalid".to_owned())?;
+        .map_err(|_| "Opus utility settings file is invalid".to_owned())?;
     Ok((settings, needs_migration))
 }
 
 fn validate_utility_settings(settings: &UtilitySettings) -> Result<(), String> {
     if settings.schema_version != UTILITY_SETTINGS_SCHEMA_VERSION {
-        return Err("RBW utility settings schema is unsupported".to_owned());
+        return Err("Opus utility settings schema is unsupported".to_owned());
     }
     for (utility_id, preference) in &settings.utilities {
         if utility_id.trim().is_empty() {
@@ -1210,12 +1214,12 @@ fn validate_utility_settings(settings: &UtilitySettings) -> Result<(), String> {
 fn write_json_atomic<T: Serialize>(path: &Path, value: &T) -> Result<(), String> {
     let parent = path
         .parent()
-        .ok_or_else(|| "RBW settings path has no parent directory".to_owned())?;
+        .ok_or_else(|| "Opus settings path has no parent directory".to_owned())?;
     fs::create_dir_all(parent).map_err(display_error)?;
     let name = path
         .file_name()
         .and_then(|name| name.to_str())
-        .ok_or_else(|| "RBW settings path has no file name".to_owned())?;
+        .ok_or_else(|| "Opus settings path has no file name".to_owned())?;
     let part = path.with_file_name(format!(".{name}-{}.part", std::process::id()));
     if part.exists() {
         fs::remove_file(&part).map_err(display_error)?;
@@ -1285,7 +1289,7 @@ fn load_qa_profile() -> Result<Option<QaProfile>, String> {
     }
     let bytes = fs::read(&path).map_err(display_error)?;
     let profile = serde_json::from_slice(&bytes)
-        .map_err(|_| "RBW QA offline profile is invalid. Choose a username again.".to_owned())?;
+        .map_err(|_| "Opus QA offline profile is invalid. Choose a username again.".to_owned())?;
     Ok(Some(profile))
 }
 
@@ -1399,11 +1403,19 @@ fn resolve_launch_identity(
                 account
                     .save_refresh_token_for_profile()
                     .map_err(display_error)?;
-                let summary = accounts::upsert_microsoft(
-                    paths,
-                    &account.session.username,
-                    &account.session.uuid,
-                )?;
+                let summary = if legacy {
+                    accounts::upsert_official_microsoft(
+                        paths,
+                        &account.session.username,
+                        &account.session.uuid,
+                    )?
+                } else {
+                    accounts::upsert_microsoft(
+                        paths,
+                        &account.session.username,
+                        &account.session.uuid,
+                    )?
+                };
                 if legacy {
                     let _ = RefreshTokenStore::new().and_then(|legacy_store| legacy_store.delete());
                 }
@@ -1421,9 +1433,39 @@ fn resolve_launch_identity(
     }
 }
 
+/// Migrate the original single-account keychain entry into the unified
+/// profile catalog before rendering the account pane. The refresh is best
+/// effort so an offline launcher can still open and offer a reconnect action.
+#[cfg(not(feature = "qa-edition"))]
+fn migrate_legacy_microsoft_account(paths: &RbwPaths) {
+    let result = (|| -> Result<(), String> {
+        let legacy_store = RefreshTokenStore::new().map_err(display_error)?;
+        if legacy_store.load().map_err(display_error)?.is_none() {
+            return Ok(());
+        }
+        let authenticator = microsoft_authenticator()?;
+        let account = authenticator
+            .refresh_session(&legacy_store)
+            .map_err(display_error)?;
+        account
+            .save_refresh_token_for_profile()
+            .map_err(display_error)?;
+        accounts::upsert_official_microsoft(
+            paths,
+            &account.session.username,
+            &account.session.uuid,
+        )?;
+        legacy_store.delete().map_err(display_error)?;
+        Ok(())
+    })();
+    if let Err(error) = result {
+        eprintln!("[OPUS/AUTH] legacy Microsoft profile migration deferred: {error}");
+    }
+}
+
 #[cfg(not(feature = "qa-edition"))]
 fn microsoft_authenticator() -> Result<MicrosoftAuthenticator, String> {
-    MicrosoftAuthenticator::new(RBW_MICROSOFT_CLIENT_ID.to_owned()).map_err(display_error)
+    MicrosoftAuthenticator::new(OPUS_MICROSOFT_CLIENT_ID.to_owned()).map_err(display_error)
 }
 
 fn bootstrap_resource_directory(app: &AppHandle) -> Result<PathBuf, String> {
@@ -1437,18 +1479,18 @@ fn bootstrap_resource_directory(app: &AppHandle) -> Result<PathBuf, String> {
 fn brand_wordmark_path(app: &AppHandle) -> Result<PathBuf, String> {
     launcher_resource_path(
         app,
-        Path::new("brand/rbw-wordmark-transparent.png"),
-        Path::new("resources/brand/rbw-wordmark-transparent.png"),
+        Path::new("brand/opus-wordmark-transparent.png"),
+        Path::new("resources/brand/opus-wordmark-transparent.png"),
     )
 }
 
 fn macos_game_app_path(app: &AppHandle) -> Result<PathBuf, String> {
     let path = launcher_resource_path(
         app,
-        Path::new("RBW Client.app"),
-        Path::new("resources/RBW Client.app"),
+        Path::new("Opus Client.app"),
+        Path::new("resources/Opus Client.app"),
     )?;
-    let executable = path.join("Contents/MacOS/RBW Client");
+    let executable = path.join("Contents/MacOS/Opus Client");
     if !path.is_dir() || !executable.is_file() {
         return Err(format!("macOS game app is incomplete: {}", path.display()));
     }
@@ -1480,7 +1522,7 @@ fn launcher_resource_path(
 fn forge_bootstrap_artifacts(directory: &Path) -> Result<ForgeBootstrapArtifacts, String> {
     if !directory.is_dir() {
         return Err(format!(
-            "RBW Forge bootstrap artifacts are missing at {}",
+            "Opus Forge bootstrap artifacts are missing at {}",
             directory.display()
         ));
     }
@@ -1495,44 +1537,50 @@ fn forge_bootstrap_artifacts(directory: &Path) -> Result<ForgeBootstrapArtifacts
         }
         if !path.is_file() {
             return Err(format!(
-                "RBW Forge artifact is not a regular file: {}",
+                "Opus Forge artifact is not a regular file: {}",
                 path.display()
             ));
         }
         let name = path
             .file_name()
             .and_then(|value| value.to_str())
-            .ok_or_else(|| format!("RBW Forge artifact has an invalid name: {}", path.display()))?;
+            .ok_or_else(|| {
+                format!(
+                    "Opus Forge artifact has an invalid name: {}",
+                    path.display()
+                )
+            })?;
         if name.starts_with("bootstrap-") && name.ends_with(".jar") {
             if bootstrap_jar.replace(path).is_some() {
-                return Err("RBW bootstrap directory contains multiple bootstrap JARs".to_owned());
+                return Err("Opus bootstrap directory contains multiple bootstrap JARs".to_owned());
             }
         } else if name.starts_with("rbw-forge-coremod-") && name.ends_with(".jar") {
             if coremod_jar.replace(path).is_some() {
                 return Err(
-                    "RBW bootstrap directory contains multiple Forge coremod JARs".to_owned(),
+                    "Opus bootstrap directory contains multiple Forge coremod JARs".to_owned(),
                 );
             }
         } else if name.starts_with("rbw-forge-client-") && name.ends_with(".jar") {
             if client_mod_jar.replace(path).is_some() {
                 return Err(
-                    "RBW bootstrap directory contains multiple Forge client-mod JARs".to_owned(),
+                    "Opus bootstrap directory contains multiple Forge client-mod JARs".to_owned(),
                 );
             }
         } else {
             return Err(format!(
-                "RBW bootstrap directory contains an unexpected JAR: {name}. Reinstall RBW Client."
+                "Opus bootstrap directory contains an unexpected JAR: {name}. Reinstall Opus Launcher."
             ));
         }
     }
     Ok(ForgeBootstrapArtifacts {
         bootstrap_jar: bootstrap_jar.ok_or_else(|| {
-            "RBW Forge bootstrap JAR is missing. Reinstall RBW Client.".to_owned()
+            "Opus Forge bootstrap JAR is missing. Reinstall Opus Launcher.".to_owned()
         })?,
-        coremod_jar: coremod_jar
-            .ok_or_else(|| "RBW Forge coremod JAR is missing. Reinstall RBW Client.".to_owned())?,
+        coremod_jar: coremod_jar.ok_or_else(|| {
+            "Opus Forge coremod JAR is missing. Reinstall Opus Launcher.".to_owned()
+        })?,
         client_mod_jar: client_mod_jar.ok_or_else(|| {
-            "RBW Forge client-mod JAR is missing. Reinstall RBW Client.".to_owned()
+            "Opus Forge client-mod JAR is missing. Reinstall Opus Launcher.".to_owned()
         })?,
     })
 }
@@ -1615,7 +1663,7 @@ pub fn run() {
 
     builder
         .run(tauri::generate_context!())
-        .expect("error while running RBW Client");
+        .expect("error while running Opus Launcher");
 }
 
 #[cfg(test)]

@@ -8,7 +8,7 @@ use std::time::Duration;
 use thiserror::Error;
 use url::Url;
 
-const USER_AGENT: &str = concat!("RBW-Client/", env!("CARGO_PKG_VERSION"));
+const USER_AGENT: &str = concat!("Opus-Client/", env!("CARGO_PKG_VERSION"));
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DownloadSpec {

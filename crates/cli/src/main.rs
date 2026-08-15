@@ -8,7 +8,7 @@ use rbw_runtime::{
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Parser)]
-#[command(name = "rbw", version, about = "RBW Client 1.8.9 launcher")]
+#[command(name = "rbw", version, about = "Opus Client 1.8.9 launcher")]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -18,7 +18,7 @@ struct Cli {
 enum Command {
     /// Validate the host before downloading or launching anything.
     Doctor,
-    /// Install the immutable Forge 1.8.9 runtime into the RBW directory.
+    /// Install the immutable Forge 1.8.9 runtime into the Opus directory.
     Install,
     /// Verify and import a user-provided OptiFine 1.8.9 HD U M5 JAR.
     ImportOptifine {
@@ -33,7 +33,7 @@ enum Command {
     /// Launch Forge + OptiFine 1.8.9.
     Launch {
         /// Username used only with --offline.
-        #[arg(long, default_value = "RBWDev")]
+        #[arg(long, default_value = "OpusDev")]
         username: String,
         /// Use a development identity; online-mode servers will reject it.
         #[arg(long)]
@@ -84,14 +84,14 @@ fn launch(
     let platform = Platform::detect()?;
     if platform.os == OperatingSystem::MacOs && !dry_run {
         anyhow::bail!(
-            "CLI game launch is disabled on macOS. Use the packaged RBW Client.app, which starts managed Java through its LaunchServices game stub. --dry-run remains available for diagnostics."
+            "CLI game launch is disabled on macOS. Use the packaged Opus Client.app, which starts managed Java through its LaunchServices game stub. --dry-run remains available for diagnostics."
         );
     }
     let paths = RbwPaths::discover()?;
     let layout = MinecraftLayout::new(paths);
     let installer = Installer::new(layout.clone(), platform)?;
 
-    println!("RBW Client");
+    println!("Opus Client");
     println!("verifying Forge + OptiFine 1.8.9 installation");
     let report = installer.prepare()?;
     println!(
@@ -118,7 +118,7 @@ fn launch(
     };
 
     let artifacts = forge_bootstrap_artifacts(bootstrap_dir)?;
-    println!("mode: RBW Forge bootstrap + coremod + typed client mod");
+    println!("mode: Opus Forge bootstrap + coremod + typed client mod");
     let mode = LaunchMode::ForgeBootstrap {
         bootstrap_jar: artifacts.bootstrap_jar,
         coremod_jar: artifacts.coremod_jar,
@@ -254,7 +254,7 @@ fn install() -> Result<()> {
     let root = paths.root.clone();
     let installer = Installer::new(MinecraftLayout::new(paths), platform)?;
 
-    println!("RBW Client installer");
+    println!("Opus Client installer");
     println!("version: Forge + OptiFine 1.8.9 (locked)");
     println!("data directory: {}", root.display());
     let report = installer.install()?;
@@ -284,7 +284,7 @@ fn doctor() -> Result<()> {
     let paths = RbwPaths::discover()?;
     let translation_available = platform.translation_available()?;
 
-    println!("RBW Client doctor");
+    println!("Opus Client doctor");
     println!("host: {} {}", platform.os, platform.host_arch);
     println!("game runtime: {} {}", platform.os, platform.game_arch);
     println!("translation required: {}", platform.requires_translation());
@@ -303,8 +303,8 @@ fn doctor() -> Result<()> {
         Err(error) => println!("managed runtime: not ready ({error})"),
     }
     match forge_bootstrap_artifacts(Path::new("game/build/bootstrap")) {
-        Ok(_) => println!("RBW Forge bootstrap: ready"),
-        Err(error) => println!("RBW Forge bootstrap: not ready ({error})"),
+        Ok(_) => println!("Opus Forge bootstrap: ready"),
+        Err(error) => println!("Opus Forge bootstrap: not ready ({error})"),
     }
     println!(
         "Microsoft client id: {}",

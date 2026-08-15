@@ -14,7 +14,8 @@ use std::time::{Duration, Instant};
 use thiserror::Error;
 use url::Url;
 
-pub const MICROSOFT_CLIENT_ID_ENV: &str = "RBW_MICROSOFT_CLIENT_ID";
+pub const MICROSOFT_CLIENT_ID_ENV: &str = "OPUS_MICROSOFT_CLIENT_ID";
+pub const LEGACY_MICROSOFT_CLIENT_ID_ENV: &str = "RBW_MICROSOFT_CLIENT_ID";
 const OAUTH_SCOPE: &str = "XboxLive.signin offline_access";
 const AUTHORIZATION_URL: &str = "https://login.microsoftonline.com/consumers/oauth2/v2.0/authorize";
 const DEVICE_CODE_URL: &str = "https://login.microsoftonline.com/consumers/oauth2/v2.0/devicecode";
@@ -27,7 +28,8 @@ const MINECRAFT_INVALID_APP_REGISTRATION_MESSAGE: &str =
     "Invalid app registration, see https://aka.ms/AppRegInfo for more information";
 const MINECRAFT_ENTITLEMENTS_URL: &str = "https://api.minecraftservices.com/entitlements/mcstore";
 const MINECRAFT_PROFILE_URL: &str = "https://api.minecraftservices.com/minecraft/profile";
-const KEYRING_SERVICE: &str = "dev.rbw.client.microsoft.refresh-token";
+const KEYRING_SERVICE: &str = "dev.opus.launcher.microsoft.refresh-token";
+const LEGACY_KEYRING_SERVICE: &str = "dev.rbw.client.microsoft.refresh-token";
 const KEYRING_ACCOUNT: &str = "default";
 const KEYRING_PROFILE_PREFIX: &str = "profile-";
 const LOOPBACK_CALLBACK_HOST: &str = "localhost";
@@ -115,7 +117,7 @@ impl Default for BrowserLoginCancellation {
 
 /// An in-memory OAuth authorization request for a native desktop client. It
 /// owns the loopback listener, state and PKCE verifier until the browser
-/// redirects back to RBW.
+/// redirects back to Opus Launcher.
 pub struct BrowserAuthorization {
     listeners: Vec<TcpListener>,
     authorization_url: String,
@@ -209,6 +211,7 @@ pub struct MicrosoftAuthenticator {
 impl MicrosoftAuthenticator {
     pub fn from_environment() -> Result<Self, AuthError> {
         let client_id = std::env::var(MICROSOFT_CLIENT_ID_ENV)
+            .or_else(|_| std::env::var(LEGACY_MICROSOFT_CLIENT_ID_ENV))
             .map_err(|_| AuthError::MissingClientId(MICROSOFT_CLIENT_ID_ENV.to_owned()))?;
         Self::new(client_id)
     }
@@ -216,7 +219,7 @@ impl MicrosoftAuthenticator {
     pub fn new(client_id: String) -> Result<Self, AuthError> {
         validate_client_id(&client_id)?;
         let client = Client::builder()
-            .user_agent(concat!("RBW-Client/", env!("CARGO_PKG_VERSION")))
+            .user_agent(concat!("Opus-Launcher/", env!("CARGO_PKG_VERSION")))
             .connect_timeout(Duration::from_secs(15))
             .timeout(Duration::from_secs(45))
             .redirect(reqwest::redirect::Policy::none())
@@ -511,6 +514,7 @@ impl MicrosoftAuthenticator {
 
 pub struct RefreshTokenStore {
     entry: keyring::Entry,
+    legacy_entry: keyring::Entry,
 }
 
 impl RefreshTokenStore {
@@ -531,6 +535,7 @@ impl RefreshTokenStore {
     fn for_keyring_account(account: &str) -> Result<Self, AuthError> {
         Ok(Self {
             entry: keyring::Entry::new(KEYRING_SERVICE, account)?,
+            legacy_entry: keyring::Entry::new(LEGACY_KEYRING_SERVICE, account)?,
         })
     }
 
@@ -545,17 +550,31 @@ impl RefreshTokenStore {
     pub fn load(&self) -> Result<Option<String>, AuthError> {
         match self.entry.get_password() {
             Ok(token) => Ok(Some(token)),
-            Err(keyring::Error::NoEntry) => Ok(None),
+            Err(keyring::Error::NoEntry) => match self.legacy_entry.get_password() {
+                Ok(token) => {
+                    self.entry.set_password(&token)?;
+                    let _ = self.legacy_entry.delete_credential();
+                    Ok(Some(token))
+                }
+                Err(keyring::Error::NoEntry) => Ok(None),
+                Err(error) => Err(error.into()),
+            },
             Err(error) => Err(error.into()),
         }
     }
 
     pub fn delete(&self) -> Result<bool, AuthError> {
-        match self.entry.delete_credential() {
-            Ok(()) => Ok(true),
-            Err(keyring::Error::NoEntry) => Ok(false),
-            Err(error) => Err(error.into()),
-        }
+        let primary_deleted = match self.entry.delete_credential() {
+            Ok(()) => true,
+            Err(keyring::Error::NoEntry) => false,
+            Err(error) => return Err(error.into()),
+        };
+        let legacy_deleted = match self.legacy_entry.delete_credential() {
+            Ok(()) => true,
+            Err(keyring::Error::NoEntry) => false,
+            Err(error) => return Err(error.into()),
+        };
+        Ok(primary_deleted || legacy_deleted)
     }
 }
 
@@ -787,15 +806,15 @@ fn write_callback_page(stream: &mut TcpStream, page: CallbackPage) {
     let (status, body) = match page {
         CallbackPage::Complete => (
             "200 OK",
-            "<!doctype html><meta charset=\"utf-8\"><title>RBW Client</title><p>Microsoft sign-in is complete. You can return to RBW Client.</p>",
+            "<!doctype html><meta charset=\"utf-8\"><title>Opus Launcher</title><p>Microsoft sign-in is complete. You can return to Opus Launcher.</p>",
         ),
         CallbackPage::Declined => (
             "200 OK",
-            "<!doctype html><meta charset=\"utf-8\"><title>RBW Client</title><p>Microsoft sign-in was cancelled or declined. You can return to RBW Client.</p>",
+            "<!doctype html><meta charset=\"utf-8\"><title>Opus Launcher</title><p>Microsoft sign-in was cancelled or declined. You can return to Opus Launcher.</p>",
         ),
         CallbackPage::Invalid => (
             "400 Bad Request",
-            "<!doctype html><meta charset=\"utf-8\"><title>RBW Client</title><p>This sign-in response is not valid. Return to RBW Client and try again.</p>",
+            "<!doctype html><meta charset=\"utf-8\"><title>Opus Launcher</title><p>This sign-in response is not valid. Return to Opus Launcher and try again.</p>",
         ),
     };
     let response = format!(
@@ -880,15 +899,15 @@ struct GenericServiceError {
 
 #[derive(Debug, Error)]
 pub enum AuthError {
-    #[error("{0} is required; register an RBW public desktop application before login")]
+    #[error("{0} is required; register an Opus public desktop application before login")]
     MissingClientId(String),
     #[error("Microsoft OAuth client id is invalid")]
     InvalidClientId,
     #[error("Microsoft returned an unsafe device verification URL")]
     InvalidVerificationUri,
-    #[error("RBW could not create a local Microsoft sign-in callback")]
+    #[error("Opus Launcher could not create a local Microsoft sign-in callback")]
     LoopbackBind(#[source] std::io::Error),
-    #[error("RBW could not receive the Microsoft sign-in callback")]
+    #[error("Opus Launcher could not receive the Microsoft sign-in callback")]
     LoopbackCallback(#[source] std::io::Error),
     #[error("secure random generation failed")]
     SecureRandom,
@@ -917,7 +936,7 @@ pub enum AuthError {
     #[error("Minecraft Java ownership is required")]
     MinecraftOwnershipRequired,
     #[error(
-        "Minecraft Services rejected RBW's application registration before Java Edition ownership could be checked. Update RBW or contact the RBW administrator."
+        "Minecraft Services rejected Opus's application registration before Java Edition ownership could be checked. Update Opus Launcher or contact the Opus administrator."
     )]
     MinecraftAppRegistrationRejected,
     #[error("no Microsoft account is stored")]

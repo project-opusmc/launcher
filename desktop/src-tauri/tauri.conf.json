@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "RBW Client",
+  "productName": "Opus Launcher",
   "version": "0.0.1",
-  "identifier": "dev.rbw.client",
+  "identifier": "dev.opus.launcher",
   "build": {
     "beforeDevCommand": "npm run desktop:dev",
     "devUrl": "http://localhost:1420",
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "RBW Client",
+        "title": "Opus Launcher",
         "width": 1220,
         "height": 760,
         "minWidth": 980,
@@ -39,7 +39,7 @@
     "resources": {
       "resources/bootstrap": "bootstrap",
       "resources/brand": "brand",
-      "resources/RBW Client.app": "RBW Client.app"
+      "resources/Opus Client.app": "Opus Client.app"
     },
     "macOS": {
       "minimumSystemVersion": "11.0"

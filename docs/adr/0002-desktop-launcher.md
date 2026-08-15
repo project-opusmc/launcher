@@ -14,7 +14,7 @@ account, settings, installation state and launch progress.
 
 ## Decision
 
-- RBW Client is a native desktop application built with Tauri 2, React and
+- Opus Launcher is a native desktop application built with Tauri 2, React and
   TypeScript. The UI is a launcher, not an overlay inside Minecraft.
 - Existing Rust crates remain authoritative for platform detection, verified
   installation, authentication, token handling and game launch planning.

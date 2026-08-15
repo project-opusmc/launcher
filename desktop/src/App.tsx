@@ -173,14 +173,14 @@ function previewSnapshot(): TuiSnapshot {
     username: "PreviewPlayer",
     uuid: "00000000000000000000000000000000",
     kind: "offline",
-    badge: "demo",
+    badge: "unofficial",
     ready: true,
     selected: true,
     legacy: false,
   };
   return {
     platform: "UI Preview",
-    dataDirectory: "~/.rbw-client",
+    dataDirectory: "~/.opus-launcher",
     minecraftReady: true,
     minecraftStatus: "Forge 1.8.9 preview state",
     optifineReady: true,
@@ -431,7 +431,7 @@ export default function App() {
       const result = await invoke<OptiFineImportResult>("import_optifine", { sourcePath: optifineSourcePath.trim() });
       setOptifineSourcePath("");
       setSnapshot((current) => current ? { ...current, optifineReady: true, optifineStatus: `${result.fileName} verified` } : current);
-      setNotice(`${result.fileName} was verified and added to this RBW runtime.`);
+      setNotice(`${result.fileName} was verified and added to this Opus runtime.`);
       void refresh();
     });
   }, [optifineSourcePath, refresh, run]);
@@ -472,7 +472,7 @@ export default function App() {
       const account = await invoke<TuiAccount>("save_offline_profile", { username: qaUsername });
       setSnapshot((current) => current ? mergeAccount(current, account) : current);
       setQaUsername("");
-      setNotice(`Demo profile ${account.username} was added to the launch list.`);
+      setNotice(`Unofficial profile ${account.username} was added to the launch list.`);
     });
   }, [qaUsername, run]);
 
@@ -495,7 +495,7 @@ export default function App() {
       const removed = await invoke<boolean>("remove_account", { accountId });
       if (!removed) throw new Error("The selected account no longer exists.");
       await refresh();
-      setNotice("The identity and its saved credential were removed from RBW Client.");
+      setNotice("The identity and its saved credential were removed from Opus Launcher.");
     });
   }, [refresh, run]);
 
@@ -505,7 +505,7 @@ export default function App() {
       setSnapshot((current) => current ? { ...current, developerTestProfile: { ...current.developerTestProfile, simulationActive: true } } : current);
       try {
         const started = await invoke<GameLaunchStarted>("simulate_developer_game");
-        if (!started.simulated) throw new Error("RBW did not confirm a developer test session.");
+        if (!started.simulated) throw new Error("Opus did not confirm a developer test session.");
         setNotice("Developer test session is running. Minecraft was not launched.");
       } catch (reason) {
         setSnapshot((current) => current ? { ...current, developerTestProfile: { ...current.developerTestProfile, simulationActive: false } } : current);

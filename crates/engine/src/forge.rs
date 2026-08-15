@@ -5,14 +5,14 @@ pub const FORGE_RUNTIME_ID: &str = "forge-optifine-1.8.9";
 pub const FORGE_PROFILE_ID: &str = "1.8.9-forge1.8.9-11.15.1.2318-1.8.9";
 pub const FORGE_MAIN_CLASS: &str = "net.minecraft.launchwrapper.Launch";
 pub const FORGE_OPTIFINE_FILE_NAME: &str = "OptiFine_1.8.9_HD_U_M5.jar";
-/// The reproducible RBW coremod artifact staged beside the desktop launcher.
+/// The reproducible Opus coremod artifact staged beside the desktop launcher.
 /// All launcher flavors use the same reviewed bytes so Demo/Release artifact
 /// drift cannot produce a build that installs successfully but cannot launch.
-pub const FORGE_COREMOD_SHA1: &str = "5d4e44450083b28559d067ccf7f53ab2b73b9984";
-pub const FORGE_COREMOD_SIZE: u64 = 101_444;
+pub const FORGE_COREMOD_SHA1: &str = "689ad5b76e1749e2be8ce91488b3a26669aba079";
+pub const FORGE_COREMOD_SIZE: u64 = 101_474;
 /// The reviewed typed Forge client mod staged by `prepareBootstrap`.
-pub const FORGE_CLIENT_MOD_SHA1: &str = "07b137286bf10e4459405a775b36374730e597c9";
-pub const FORGE_CLIENT_MOD_SIZE: u64 = 335_621;
+pub const FORGE_CLIENT_MOD_SHA1: &str = "b5edc2d61edb6d116984859f283407d7940f675e";
+pub const FORGE_CLIENT_MOD_SIZE: u64 = 255_915;
 
 const FORGE_LOCK_JSON: &str = include_str!("../runtime-lock/forge-1.8.9-11.15.1.2318.lock.json");
 
@@ -40,8 +40,8 @@ pub struct ForgeLibrary {
     pub size: u64,
 }
 
-/// OptiFine is never downloaded or bundled by RBW. The caller may only import
-/// a locally user-provided JAR matching this immutable contract into RBW's
+/// OptiFine is never downloaded or bundled by Opus. The caller may only import
+/// a locally user-provided JAR matching this immutable contract into Opus's
 /// isolated runtime.
 #[derive(Debug, Clone, Deserialize)]
 pub struct OptiFineLock {
@@ -164,13 +164,13 @@ mod tests {
         assert_eq!(lock.optifine.size, 2_585_014);
         assert_eq!(
             FORGE_COREMOD_SHA1,
-            "5d4e44450083b28559d067ccf7f53ab2b73b9984"
+            "689ad5b76e1749e2be8ce91488b3a26669aba079"
         );
-        assert_eq!(FORGE_COREMOD_SIZE, 101_444);
+        assert_eq!(FORGE_COREMOD_SIZE, 101_474);
         assert_eq!(
             FORGE_CLIENT_MOD_SHA1,
-            "07b137286bf10e4459405a775b36374730e597c9"
+            "b5edc2d61edb6d116984859f283407d7940f675e"
         );
-        assert_eq!(FORGE_CLIENT_MOD_SIZE, 335_621);
+        assert_eq!(FORGE_CLIENT_MOD_SIZE, 255_915);
     }
 }

@@ -9,6 +9,9 @@ use std::sync::{Mutex, MutexGuard};
 
 const ACCOUNTS_FILE: &str = "accounts-v1.json";
 const ACCOUNT_SCHEMA_VERSION: u8 = 1;
+const OFFICIAL_BADGE: &str = "official";
+const PREMIUM_BADGE: &str = "premium";
+const UNOFFICIAL_BADGE: &str = "unofficial";
 pub const LEGACY_DEFAULT_ACCOUNT_ID: &str = "legacy-default";
 static ACCOUNT_FILE_LOCK: Mutex<()> = Mutex::new(());
 
@@ -82,12 +85,31 @@ pub fn load(paths: &RbwPaths) -> Result<AccountFileView, String> {
     load_with_legacy(paths, legacy_available)
 }
 
+/// Persist non-breaking metadata migrations (currently the demo ->
+/// unofficial badge rename) without changing account IDs or credentials.
+pub fn migrate_metadata(paths: &RbwPaths) -> Result<(), String> {
+    let _catalog_lock = lock_catalog();
+    let path = accounts_path(paths);
+    if !path.exists() {
+        return Ok(());
+    }
+    let bytes = fs::read(&path).map_err(display_error)?;
+    let mut file = serde_json::from_slice::<AccountFile>(&bytes)
+        .map_err(|_| "Opus account list is invalid".to_owned())?;
+    let before = file.clone();
+    normalize_file(&mut file)?;
+    if file != before {
+        save(paths, &file)?;
+    }
+    Ok(())
+}
+
 fn load_with_legacy(paths: &RbwPaths, legacy_available: bool) -> Result<AccountFileView, String> {
     let path = accounts_path(paths);
     let mut file = if path.exists() {
         let bytes = fs::read(&path).map_err(display_error)?;
         serde_json::from_slice::<AccountFile>(&bytes)
-            .map_err(|_| "RBW account list is invalid".to_owned())?
+            .map_err(|_| "Opus account list is invalid".to_owned())?
     } else {
         AccountFile::default()
     };
@@ -127,10 +149,10 @@ impl AccountFileView {
                 0,
                 AccountSummary {
                     id: LEGACY_DEFAULT_ACCOUNT_ID.to_owned(),
-                    username: "Connected Microsoft account".to_owned(),
+                    username: "Microsoft profile (identifying...)".to_owned(),
                     uuid: None,
                     kind: AccountKind::Microsoft,
-                    badge: "official".to_owned(),
+                    badge: OFFICIAL_BADGE.to_owned(),
                     ready: true,
                     selected: selected == Some(LEGACY_DEFAULT_ACCOUNT_ID),
                     legacy: true,
@@ -179,6 +201,23 @@ pub fn upsert_microsoft(
     username: &str,
     uuid: &str,
 ) -> Result<AccountSummary, String> {
+    upsert_microsoft_with_badge(paths, username, uuid, PREMIUM_BADGE)
+}
+
+pub fn upsert_official_microsoft(
+    paths: &RbwPaths,
+    username: &str,
+    uuid: &str,
+) -> Result<AccountSummary, String> {
+    upsert_microsoft_with_badge(paths, username, uuid, OFFICIAL_BADGE)
+}
+
+fn upsert_microsoft_with_badge(
+    paths: &RbwPaths,
+    username: &str,
+    uuid: &str,
+    badge: &str,
+) -> Result<AccountSummary, String> {
     let _catalog_lock = lock_catalog();
     let normalized_uuid = normalize_uuid(uuid)?;
     if username.trim().is_empty() || username.chars().count() > 32 {
@@ -191,7 +230,7 @@ pub fn upsert_microsoft(
         username: username.to_owned(),
         uuid: normalized_uuid,
         kind: AccountKind::Microsoft,
-        badge: "premium".to_owned(),
+        badge: badge.to_owned(),
     };
     if let Some(existing) = view
         .file
@@ -222,7 +261,7 @@ pub fn upsert_offline(paths: &RbwPaths, username: &str) -> Result<AccountSummary
         username: username.to_owned(),
         uuid,
         kind: AccountKind::Offline,
-        badge: "demo".to_owned(),
+        badge: UNOFFICIAL_BADGE.to_owned(),
     };
     if let Some(existing) = view
         .file
@@ -255,7 +294,7 @@ pub fn import_offline_if_missing(paths: &RbwPaths, username: &str) -> Result<boo
         username: username.to_owned(),
         uuid: identity.uuid,
         kind: AccountKind::Offline,
-        badge: "demo".to_owned(),
+        badge: UNOFFICIAL_BADGE.to_owned(),
     });
     if view.file.selected_account_id.is_none() {
         view.file.selected_account_id = Some(id);
@@ -322,12 +361,12 @@ fn save(paths: &RbwPaths, file: &AccountFile) -> Result<(), String> {
     let path = accounts_path(paths);
     let parent = path
         .parent()
-        .ok_or_else(|| "RBW account path has no parent directory".to_owned())?;
+        .ok_or_else(|| "Opus account path has no parent directory".to_owned())?;
     fs::create_dir_all(parent).map_err(display_error)?;
     let name = path
         .file_name()
         .and_then(|name| name.to_str())
-        .ok_or_else(|| "RBW account path has no file name".to_owned())?;
+        .ok_or_else(|| "Opus account path has no file name".to_owned())?;
     let part = path.with_file_name(format!(".{name}-{}.part", std::process::id()));
     if part.exists() {
         fs::remove_file(&part).map_err(display_error)?;
@@ -363,7 +402,16 @@ fn save(paths: &RbwPaths, file: &AccountFile) -> Result<(), String> {
 
 fn normalize_file(file: &mut AccountFile) -> Result<(), String> {
     if file.schema_version != ACCOUNT_SCHEMA_VERSION {
-        return Err("RBW account list schema is unsupported".to_owned());
+        return Err("Opus account list schema is unsupported".to_owned());
+    }
+    for account in &mut file.accounts {
+        account.badge = match account.kind {
+            AccountKind::Microsoft if account.badge.eq_ignore_ascii_case(OFFICIAL_BADGE) => {
+                OFFICIAL_BADGE.to_owned()
+            }
+            AccountKind::Microsoft => PREMIUM_BADGE.to_owned(),
+            AccountKind::Offline => UNOFFICIAL_BADGE.to_owned(),
+        };
     }
     file.accounts
         .retain(|account| validate_record(account).is_ok());
@@ -383,10 +431,19 @@ fn validate_record(account: &AccountRecord) -> Result<(), String> {
     }
     normalize_uuid(&account.uuid)?;
     match account.kind {
-        AccountKind::Microsoft if account.id == format!("microsoft:{}", account.uuid) => Ok(()),
+        AccountKind::Microsoft
+            if account.id == format!("microsoft:{}", account.uuid)
+                && matches!(account.badge.as_str(), OFFICIAL_BADGE | PREMIUM_BADGE) =>
+        {
+            Ok(())
+        }
         AccountKind::Offline if account.id == format!("demo:{}", account.uuid) => {
             GameIdentity::offline(&account.username).map_err(display_error)?;
-            Ok(())
+            if account.badge == UNOFFICIAL_BADGE {
+                Ok(())
+            } else {
+                Err("offline account badge is invalid".to_owned())
+            }
         }
         _ => Err("account metadata does not match its identity kind".to_owned()),
     }
@@ -432,7 +489,7 @@ mod tests {
             username: username.to_owned(),
             uuid: identity.uuid,
             kind: AccountKind::Offline,
-            badge: "demo".to_owned(),
+            badge: UNOFFICIAL_BADGE.to_owned(),
         }
     }
 
@@ -457,7 +514,11 @@ mod tests {
         assert_eq!(summaries.len(), 2);
         assert_eq!(selected_id(&view), Some(second.id));
         assert!(summaries.iter().all(|account| account.ready));
-        assert!(summaries.iter().all(|account| account.badge == "demo"));
+        assert!(
+            summaries
+                .iter()
+                .all(|account| account.badge == UNOFFICIAL_BADGE)
+        );
         assert_eq!(
             summaries.iter().filter(|account| account.selected).count(),
             1
@@ -485,6 +546,69 @@ mod tests {
         normalize_file(&mut file).unwrap();
         assert_eq!(file.accounts, vec![valid]);
         assert_eq!(file.selected_account_id, None);
+    }
+
+    #[test]
+    fn metadata_migration_persists_unofficial_badges_without_changing_ids() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = RbwPaths::from_root(directory.path().join("opus")).unwrap();
+        let identity = GameIdentity::offline("LegacyDemo").unwrap();
+        let id = format!("demo:{}", identity.uuid);
+        save(
+            &paths,
+            &AccountFile {
+                schema_version: ACCOUNT_SCHEMA_VERSION,
+                selected_account_id: Some(id.clone()),
+                accounts: vec![AccountRecord {
+                    id: id.clone(),
+                    username: "LegacyDemo".to_owned(),
+                    uuid: identity.uuid,
+                    kind: AccountKind::Offline,
+                    badge: "demo".to_owned(),
+                }],
+            },
+        )
+        .unwrap();
+
+        migrate_metadata(&paths).unwrap();
+
+        let migrated: AccountFile =
+            serde_json::from_slice(&fs::read(accounts_path(&paths)).unwrap()).unwrap();
+        assert_eq!(migrated.selected_account_id, Some(id.clone()));
+        assert_eq!(migrated.accounts[0].id, id);
+        assert_eq!(migrated.accounts[0].badge, UNOFFICIAL_BADGE);
+    }
+
+    #[test]
+    fn multiple_microsoft_profiles_keep_names_and_supported_badges() {
+        let mut file = AccountFile {
+            schema_version: ACCOUNT_SCHEMA_VERSION,
+            selected_account_id: Some("microsoft:22222222222222222222222222222222".to_owned()),
+            accounts: vec![
+                AccountRecord {
+                    id: "microsoft:11111111111111111111111111111111".to_owned(),
+                    username: "FirstPlayer".to_owned(),
+                    uuid: "11111111111111111111111111111111".to_owned(),
+                    kind: AccountKind::Microsoft,
+                    badge: OFFICIAL_BADGE.to_owned(),
+                },
+                AccountRecord {
+                    id: "microsoft:22222222222222222222222222222222".to_owned(),
+                    username: "SecondPlayer".to_owned(),
+                    uuid: "22222222222222222222222222222222".to_owned(),
+                    kind: AccountKind::Microsoft,
+                    badge: PREMIUM_BADGE.to_owned(),
+                },
+            ],
+        };
+
+        normalize_file(&mut file).unwrap();
+
+        assert_eq!(file.accounts.len(), 2);
+        assert_eq!(file.accounts[0].username, "FirstPlayer");
+        assert_eq!(file.accounts[0].badge, OFFICIAL_BADGE);
+        assert_eq!(file.accounts[1].username, "SecondPlayer");
+        assert_eq!(file.accounts[1].badge, PREMIUM_BADGE);
     }
 
     #[test]

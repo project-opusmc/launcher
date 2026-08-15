@@ -114,14 +114,10 @@ button:disabled {
 }
 
 .tui-brand-mark {
-  display: inline-grid;
-  width: 32px;
-  height: 24px;
-  place-items: center;
-  border: 1px solid var(--tui-border-strong);
-  color: var(--tui-foreground);
-  font-size: 10px;
-  font-weight: 700;
+  display: block;
+  width: 28px;
+  height: 28px;
+  object-fit: contain;
 }
 
 .tui-header-state {
@@ -712,7 +708,7 @@ button:disabled {
   color: var(--tui-accent);
 }
 
-.tui-account-badge.is-demo {
+.tui-account-badge.is-unofficial {
   color: var(--tui-foreground);
 }
 

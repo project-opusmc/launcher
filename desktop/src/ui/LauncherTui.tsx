@@ -131,7 +131,7 @@ const utilityAnchorLabels: Record<TuiUtilityAnchor, string> = {
   "bottom-right": "Bottom right",
 };
 
-const logCategories = ["Launcher", "Authentication", "Installation", "Minecraft", "RBW"] as const;
+const logCategories = ["Launcher", "Authentication", "Installation", "Minecraft", "Opus"] as const;
 
 export default function LauncherTui(props: LauncherTuiProps) {
   const [focusedPane, setFocusedPane] = useState(0);
@@ -402,7 +402,7 @@ export default function LauncherTui(props: LauncherTuiProps) {
     { label: "OptiFine", value: optifineReady ? "HD U M5" : snapshotPending ? "CHECKING" : "MISSING", tone: optifineReady ? "success" : "warning" },
     { label: "Java", value: installed ? "8" : snapshotPending ? "CHECKING" : "MISSING", tone: installed ? "success" : "warning" },
     { label: "Memory", value: `${props.settings.maxMemoryMib} MB` },
-    { label: "RBW Build", value: gameLaunchReady ? buildLabel : "UNVERIFIED", tone: gameLaunchReady ? "success" : "warning" },
+    { label: "Opus Build", value: gameLaunchReady ? buildLabel : "UNVERIFIED", tone: gameLaunchReady ? "success" : "warning" },
   ];
 
   const profileRows: readonly KeyValueRow[] = [
@@ -428,8 +428,8 @@ export default function LauncherTui(props: LauncherTuiProps) {
     <main className="tui-app">
       <header className="tui-header">
         <div className="tui-header-brand">
-          <span className="tui-brand-mark">RBW</span>
-          <strong>RBW CLIENT</strong>
+          <img className="tui-brand-mark" src="/brand/opus-mark-64.png" alt="" />
+          <strong>OPUS LAUNCHER</strong>
           <span className="tui-header-state"><StatusText value={runtimeState} tone={readyToLaunch || activeLaunchCount > 0 ? "success" : "warning"} /></span>
         </div>
         <div className="tui-header-meta">
@@ -640,7 +640,7 @@ function InstallationScreen(props: {
     { label: "Minecraft", value: props.installed ? "READY / 1.8.9" : "MISSING", tone: props.installed ? "success" : "warning" },
     { label: "Forge", value: props.installed ? "READY / 11.15.1.2318" : "MISSING", tone: props.installed ? "success" : "warning" },
     { label: "OptiFine", value: props.optifineReady ? "READY / HD U M5" : "MISSING", tone: props.optifineReady ? "success" : "warning" },
-    { label: "RBW Client", value: props.snapshot?.gameLaunchReady ? "READY" : "MISSING", tone: props.snapshot?.gameLaunchReady ? "success" : "warning" },
+    { label: "Opus Client", value: props.snapshot?.gameLaunchReady ? "READY" : "MISSING", tone: props.snapshot?.gameLaunchReady ? "success" : "warning" },
     { label: "Java", value: props.installed ? "READY / 8" : "MISSING", tone: props.installed ? "success" : "warning" },
   ];
   return (
@@ -730,7 +730,13 @@ function AccountScreen(props: {
               disabled={props.snapshotPending || props.busy !== null || props.developerTestProfileActive}
               onClick={props.snapshotUnavailable ? props.onRefresh : props.onStartMicrosoftLogin}
             >
-              {props.snapshotPending ? "CHECKING..." : props.snapshotUnavailable ? "REFRESH" : "ADD MICROSOFT ACCOUNT"}
+              {props.snapshotPending
+                ? "CHECKING..."
+                : props.snapshotUnavailable
+                  ? "REFRESH"
+                  : props.accounts.length > 0
+                    ? "ADD ANOTHER MICROSOFT ACCOUNT"
+                    : "ADD MICROSOFT ACCOUNT"}
             </button>
           ) : null}
           <button type="button" className="tui-action-button" data-tui-nav-item disabled={props.busy !== null} onClick={props.onRefresh}>REFRESH LIST</button>
@@ -740,7 +746,7 @@ function AccountScreen(props: {
         <KeyValueList rows={accountRows} />
         <div className="tui-account-manager">
           <div className="tui-form-stack">
-            <label htmlFor="tui-qa-username">New demo profile</label>
+            <label htmlFor="tui-qa-username">New unofficial profile</label>
             <input
               id="tui-qa-username"
               type="text"
@@ -754,7 +760,7 @@ function AccountScreen(props: {
             />
             <p className={qaUsernameValid ? "tui-help is-valid" : "tui-help"}>3-16 letters, numbers, or underscores.</p>
             <button type="button" className="tui-action-button" data-tui-nav-item disabled={!qaUsernameValid || props.busy !== null || props.snapshotUnavailable} onClick={props.onSaveQaProfile}>
-              ADD DEMO PROFILE
+              ADD UNOFFICIAL PROFILE
             </button>
           </div>
           {selectedAccount ? (
@@ -905,7 +911,7 @@ function SettingsScreen(props: {
                 disabled={props.busy !== null}
                 onChange={(event) => props.onSettingsChange({ ...props.settings, closeLauncherOnGameStart: event.target.checked })}
               />
-              <span>Hide RBW while Minecraft is open</span>
+              <span>Hide Opus Launcher while Minecraft is open</span>
             </label>
           </div>
         ) : null}
@@ -928,7 +934,7 @@ function SettingsScreen(props: {
         ) : null}
         {props.index === 3 ? (
           <div className="tui-setting-editor">
-            <label>RBW data directory</label>
+            <label>Opus data directory</label>
             <code>{props.snapshot?.dataDirectory ?? "Unavailable"}</code>
             <p>This isolated directory does not modify the normal .minecraft installation.</p>
           </div>
@@ -1062,30 +1068,30 @@ function taskPresentation(busy: string, account: TuiAccount | null) {
   const identity = account ? `[${account.badge.toUpperCase()}] ${account.username}` : "selected identity";
   switch (busy) {
     case "install":
-      return { title: "INSTALL / VERIFY", detail: "Preparing managed runtime", footer: "Keep RBW Client open until verification completes." };
+      return { title: "INSTALL / VERIFY", detail: "Preparing managed runtime", footer: "Keep Opus Launcher open until verification completes." };
     case "launch":
       return { title: "LAUNCHING MINECRAFT", detail: `Preparing isolated instance for ${identity}`, footer: "Authenticating, verifying mods and handing off to Java." };
     case "login":
       return { title: "MICROSOFT SIGN-IN", detail: "Waiting for the secure browser sign-in to complete", footer: "Finish sign-in in your browser." };
     case "optifine":
-      return { title: "VERIFYING OPTIFINE", detail: "Checking the selected JAR and importing it into RBW", footer: "The source file will not be modified." };
+      return { title: "VERIFYING OPTIFINE", detail: "Checking the selected JAR and importing it into Opus", footer: "The source file will not be modified." };
     case "settings":
       return { title: "SAVING SETTINGS", detail: "Writing launcher settings atomically", footer: "Settings are being committed." };
     case "offline-profile":
-      return { title: "ADDING DEMO PROFILE", detail: "Creating an isolated offline identity", footer: "The profile will appear in the shared launch list." };
+      return { title: "ADDING UNOFFICIAL PROFILE", detail: "Creating an isolated offline identity", footer: "The profile will appear in the shared launch list." };
     case "account-select":
       return { title: "SELECTING IDENTITY", detail: `Selecting ${identity}`, footer: "The next launch will use this identity." };
     case "account-remove":
       return { title: "REMOVING IDENTITY", detail: `Removing ${identity}`, footer: "Saved credentials for this identity are being deleted." };
     default:
-      return { title: "RBW CLIENT", detail: `Running ${busy}`, footer: "Please wait for the operation to complete." };
+      return { title: "OPUS LAUNCHER", detail: `Running ${busy}`, footer: "Please wait for the operation to complete." };
   }
 }
 
 function badgeToneClass(badge: string) {
   if (badge.toLowerCase() === "premium") return "is-premium";
   if (badge.toLowerCase() === "official") return "is-official";
-  if (badge.toLowerCase() === "demo") return "is-demo";
+  if (badge.toLowerCase() === "unofficial" || badge.toLowerCase() === "demo") return "is-unofficial";
   return "is-generic";
 }
 
@@ -1113,9 +1119,9 @@ function buildLogLines(props: LauncherTuiProps, runtimeState: string): string[] 
 }
 
 function friendlyError(error: string) {
-  const registrationPrefix = "Minecraft Services rejected RBW's application registration";
+  const registrationPrefix = "Minecraft Services rejected Opus's application registration";
   if (error.includes(registrationPrefix)) {
-    return "Microsoft sign-in completed, but RBW's application ID is still awaiting Minecraft Services approval.";
+    return "Microsoft sign-in completed, but Opus's application ID is still awaiting Minecraft Services approval.";
   }
   return error;
 }

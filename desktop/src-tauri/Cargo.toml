@@ -1,12 +1,12 @@
 [package]
-name = "rbw-desktop"
+name = "opus-launcher"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
 [lib]
-name = "rbw_desktop"
+name = "opus_launcher"
 crate-type = ["lib", "cdylib", "staticlib"]
 
 [features]
@@ -25,7 +25,7 @@ qa-edition = []
 ui-preview = ["qa-edition", "rbw-runtime/ui-preview-artifact"]
 
 [[bin]]
-name = "rbw-desktop"
+name = "opus-launcher"
 path = "src/main.rs"
 
 [build-dependencies]

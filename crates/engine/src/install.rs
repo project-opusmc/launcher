@@ -657,7 +657,7 @@ impl Installer {
     }
 
     /// Import a locally user-provided OptiFine JAR after verifying it against
-    /// the checked-in contract. RBW never downloads, bundles, or removes the
+    /// the checked-in contract. Opus never downloads, bundles, or removes the
     /// original file.
     pub fn import_optifine(&self, source: &Path) -> Result<PathBuf, InstallError> {
         self.with_install_lock(|| self.import_optifine_locked(source))

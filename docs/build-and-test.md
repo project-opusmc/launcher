@@ -61,14 +61,14 @@ Premium release bundle:
 
 ```bash
 npm --prefix desktop run tauri:build:premium
-# → target/release/bundle/macos/RBW Client.app
+# → target/release/bundle/macos/Opus Launcher.app
 ```
 
 QA offline demo (deliberately a debug bundle):
 
 ```bash
 npm --prefix desktop run tauri:build:qa
-# → target/debug/bundle/macos/RBW Client Demo.app
+# → target/debug/bundle/macos/Opus Launcher QA.app
 
 npm --prefix desktop run tauri:dev:qa     # QA in dev mode
 ```
@@ -108,7 +108,7 @@ when a required translation layer is missing.
 boundaries to know about:
 
 - **On macOS a real launch is blocked.** Only `--dry-run` works; use
-  `RBW Client.app`, whose LaunchServices stub preserves the foreground game
+  `Opus Launcher.app`, whose LaunchServices stub preserves the foreground game
   identity.
 - A launch requires the locked Forge runtime, a verified local OptiFine import,
   and the bundled Forge bridge/coremod. There is no vanilla or legacy-bootstrap

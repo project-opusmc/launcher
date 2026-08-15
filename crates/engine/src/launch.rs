@@ -105,8 +105,8 @@ pub enum LaunchMode {
     Bootstrap {
         classpath: Vec<PathBuf>,
     },
-    /// Forge owns Minecraft's class loader. The small RBW bootstrap keeps
-    /// identity arguments off the process command line, while the RBW coremod
+    /// Forge owns Minecraft's class loader. The small Opus bootstrap keeps
+    /// identity arguments off the process command line, while the Opus coremod
     /// and typed client mod are staged into the isolated Forge `mods` directory.
     ForgeBootstrap {
         bootstrap_jar: PathBuf,
@@ -524,7 +524,7 @@ fn launch_mode_name(mode: &LaunchMode) -> &'static str {
 
 fn platform_jvm_arguments(os: OperatingSystem) -> Vec<OsString> {
     match os {
-        OperatingSystem::MacOs => vec![OsString::from("-Xdock:name=RBW Client")],
+        OperatingSystem::MacOs => vec![OsString::from("-Xdock:name=Opus Client")],
         OperatingSystem::Windows | OperatingSystem::Linux => Vec::new(),
     }
 }
@@ -1321,7 +1321,7 @@ fn restrict_private_file_permissions(_: &Path) -> Result<(), io::Error> {
 }
 
 fn validate_macos_game_app(game_app: &Path) -> Result<(), LaunchError> {
-    let executable = game_app.join("Contents/MacOS/RBW Client");
+    let executable = game_app.join("Contents/MacOS/Opus Client");
     if !game_app.is_dir() || !executable.is_file() {
         return Err(LaunchError::MacosGameAppMissing(game_app.to_path_buf()));
     }
@@ -1535,19 +1535,19 @@ pub enum LaunchError {
     MissingBootstrapEntry(PathBuf),
     #[error("Forge launch requires the pinned Forge + OptiFine runtime, got {0}")]
     ForgeRuntimeRequired(String),
-    #[error("the Forge runtime must use the Forge bootstrap, not the legacy RBW bootstrap")]
+    #[error("the Forge runtime must use the Forge bootstrap, not the legacy Opus bootstrap")]
     ForgeBootstrapRequired,
     #[error("Forge launch requires an imported OptiFine 1.8.9 HD U M5 JAR")]
     OptiFineRequired,
     #[error("managed OptiFine failed integrity verification: {}", .0.display())]
     InvalidOptiFine(PathBuf),
-    #[error("RBW Forge coremod is missing: {}", .0.display())]
+    #[error("Opus Forge coremod is missing: {}", .0.display())]
     MissingForgeCoremod(PathBuf),
-    #[error("RBW Forge coremod is invalid: {}", .0.display())]
+    #[error("Opus Forge coremod is invalid: {}", .0.display())]
     InvalidForgeCoremod(PathBuf),
-    #[error("RBW Forge client mod is missing: {}", .0.display())]
+    #[error("Opus Forge client mod is missing: {}", .0.display())]
     MissingForgeClientMod(PathBuf),
-    #[error("RBW Forge client mod is invalid: {}", .0.display())]
+    #[error("Opus Forge client mod is invalid: {}", .0.display())]
     InvalidForgeClientMod(PathBuf),
     #[error("unmanaged JAR or directory in isolated Forge mods directory: {}", .0.display())]
     UnmanagedForgeMod(PathBuf),
@@ -1577,7 +1577,7 @@ pub enum LaunchError {
     InvalidAccessToken,
     #[error("unsupported authenticated user type: {0}")]
     InvalidUserType(String),
-    #[error("authenticated sessions must launch through RBW bootstrap")]
+    #[error("authenticated sessions must launch through Opus bootstrap")]
     AuthenticatedDirectLaunchForbidden,
     #[error("game argument is not valid UTF-8")]
     NonUtf8Argument(OsString),
@@ -1831,7 +1831,7 @@ mod tests {
     fn macos_jvm_arguments_set_the_dock_name() {
         assert_eq!(
             platform_jvm_arguments(OperatingSystem::MacOs),
-            vec![OsString::from("-Xdock:name=RBW Client",)]
+            vec![OsString::from("-Xdock:name=Opus Client",)]
         );
         assert!(platform_jvm_arguments(OperatingSystem::Windows).is_empty());
         assert!(platform_jvm_arguments(OperatingSystem::Linux).is_empty());
@@ -1844,7 +1844,7 @@ mod tests {
             Path::new("/tmp/stdout"),
             Path::new("/tmp/stderr"),
             Path::new("/tmp/game"),
-            Path::new("/tmp/RBW Client.app"),
+            Path::new("/tmp/Opus Client.app"),
             Path::new("/tmp/java"),
             &[OsString::from("-Xmx2G")],
             "dev.rbw.bootstrap.ForgeBootstrapMain",
