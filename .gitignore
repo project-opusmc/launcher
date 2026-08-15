@@ -7,9 +7,18 @@
 /desktop/src-tauri/resources/game-app/Contents/MacOS/Ranked Bedwars Client
 /desktop/src-tauri/resources/bootstrap/*.jar
 /game/.gradle/
+/game/client-mod/.gradle/
 /game/**/build/
 /game/client-mod/preview/*.status.json
 /game/client-mod/run/screenshots/rbw-preview*.png
+/game/client-mod/run/
+/.gradle/
+/logs/
+/crash-reports/
+/saves/
+/screenshots/
+/hs_err_pid*.log
+/forge-installer.jar.log
 /.idea/
 /.vscode/
 /.DS_Store
