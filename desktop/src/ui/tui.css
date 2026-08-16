@@ -1127,12 +1127,13 @@ select:focus-visible {
   display: grid;
   place-items: center;
   width: 100%;
-  height: 300px;
+  height: 320px;
   border: 1px solid var(--tui-border);
   background:
-    radial-gradient(circle at 50% 38%, rgba(85, 167, 255, 0.12), transparent 60%),
+    radial-gradient(circle at 50% 40%, rgba(85, 167, 255, 0.12), transparent 62%),
     repeating-linear-gradient(0deg, #070707, #070707 12px, #0b0b0b 12px, #0b0b0b 24px);
-  perspective: 900px;
+  perspective: 620px;
+  perspective-origin: 50% 42%;
   cursor: grab;
   overflow: hidden;
   touch-action: none;
@@ -1142,39 +1143,51 @@ select:focus-visible {
   cursor: grabbing;
 }
 
-.tui-skin-model {
+/* Scene keeps a fixed 3D frame; the root spins inside it. */
+.tui-skin-scene {
   position: relative;
-  width: 96px;
-  height: 192px;
+  width: 1px;
+  height: 1px;
+  transform-style: preserve-3d;
+}
+
+.tui-skin-root {
+  position: absolute;
+  left: 0;
+  top: 0;
   transform-style: preserve-3d;
   will-change: transform;
 }
 
-/* Two flat figures mounted back-to-back so a Y rotation reads as a 360 turn. */
-.tui-skin-figure {
+/* Each body part is a zero-size anchor; its faces are positioned in 3D. */
+.tui-skin-part {
   position: absolute;
-  left: 50%;
+  left: 0;
   top: 0;
-  transform: translateX(-50%);
+  width: 0;
+  height: 0;
+  transform-style: preserve-3d;
+}
+
+.tui-skin-face {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform-origin: center center;
   backface-visibility: hidden;
+  outline: 0.5px solid rgba(0, 0, 0, 0.25);
 }
 
-.tui-skin-figure.is-front {
-  transform: translateX(-50%) translateZ(9px);
-}
-
-.tui-skin-figure.is-back {
-  transform: translateX(-50%) rotateY(180deg) translateZ(9px);
-}
-
-.tui-skin-cell {
-  display: block;
+.tui-skin-face-overlay {
+  outline: none;
 }
 
 .tui-skin-controls {
   display: flex;
   align-items: center;
   gap: var(--tui-space-md);
+  flex-wrap: wrap;
+  justify-content: center;
 }
 
 .tui-skin-hint {

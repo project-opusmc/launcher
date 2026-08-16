@@ -688,10 +688,209 @@ function InstallationScreen(props: {
   );
 }
 
+const SKIN_PX = 7;
+
+type FaceRects = {
+  front: [number, number, number, number];
+  back: [number, number, number, number];
+  right: [number, number, number, number];
+  left: [number, number, number, number];
+  top: [number, number, number, number];
+  bottom: [number, number, number, number];
+};
+
+/// One cuboid body part: width/height/depth in skin pixels, its offset from the
+/// model centre in skin pixels, and the UV rectangles for its six faces.
+type BodyPart = {
+  key: string;
+  w: number;
+  h: number;
+  d: number;
+  x: number;
+  y: number;
+  base: FaceRects;
+  overlay?: FaceRects;
+};
+
+/// Classic Minecraft 1.8 64x64 UV layout. `armW` is 4 for the classic model and
+/// 3 for the slim model; the left arm/leg use the dedicated 64x64 regions.
+function bodyParts(slim: boolean): BodyPart[] {
+  const a = slim ? 3 : 4;
+  return [
+    {
+      key: "head",
+      w: 8,
+      h: 8,
+      d: 8,
+      x: 0,
+      y: -12,
+      base: {
+        front: [8, 8, 8, 8],
+        back: [24, 8, 8, 8],
+        right: [0, 8, 8, 8],
+        left: [16, 8, 8, 8],
+        top: [8, 0, 8, 8],
+        bottom: [16, 0, 8, 8],
+      },
+      overlay: {
+        front: [40, 8, 8, 8],
+        back: [56, 8, 8, 8],
+        right: [32, 8, 8, 8],
+        left: [48, 8, 8, 8],
+        top: [40, 0, 8, 8],
+        bottom: [48, 0, 8, 8],
+      },
+    },
+    {
+      key: "body",
+      w: 8,
+      h: 12,
+      d: 4,
+      x: 0,
+      y: -2,
+      base: {
+        front: [20, 20, 8, 12],
+        back: [32, 20, 8, 12],
+        right: [16, 20, 4, 12],
+        left: [28, 20, 4, 12],
+        top: [20, 16, 8, 4],
+        bottom: [28, 16, 8, 4],
+      },
+    },
+    {
+      key: "arm-right",
+      w: a,
+      h: 12,
+      d: 4,
+      x: -(4 + a / 2),
+      y: -2,
+      base: {
+        right: [40, 20, 4, 12],
+        front: [44, 20, a, 12],
+        left: [44 + a, 20, 4, 12],
+        back: [44 + a + 4, 20, a, 12],
+        top: [44, 16, a, 4],
+        bottom: [44 + a, 16, a, 4],
+      },
+    },
+    {
+      key: "arm-left",
+      w: a,
+      h: 12,
+      d: 4,
+      x: 4 + a / 2,
+      y: -2,
+      base: {
+        right: [32, 52, 4, 12],
+        front: [36, 52, a, 12],
+        left: [36 + a, 52, 4, 12],
+        back: [40 + a, 52, a, 12],
+        top: [36, 48, a, 4],
+        bottom: [36 + a, 48, a, 4],
+      },
+    },
+    {
+      key: "leg-right",
+      w: 4,
+      h: 12,
+      d: 4,
+      x: -2,
+      y: 10,
+      base: {
+        right: [0, 20, 4, 12],
+        front: [4, 20, 4, 12],
+        left: [8, 20, 4, 12],
+        back: [12, 20, 4, 12],
+        top: [4, 16, 4, 4],
+        bottom: [8, 16, 4, 4],
+      },
+    },
+    {
+      key: "leg-left",
+      w: 4,
+      h: 12,
+      d: 4,
+      x: 2,
+      y: 10,
+      base: {
+        right: [16, 52, 4, 12],
+        front: [20, 52, 4, 12],
+        left: [24, 52, 4, 12],
+        back: [28, 52, 4, 12],
+        top: [20, 48, 4, 4],
+        bottom: [24, 48, 4, 4],
+      },
+    },
+  ];
+}
+
+/// Background style that samples one UV rectangle from the 64x64 skin sheet.
+function faceTexture(url: string, rect: [number, number, number, number]): CSSProperties {
+  const [x, y, w, h] = rect;
+  return {
+    backgroundImage: `url("${url}")`,
+    backgroundRepeat: "no-repeat",
+    backgroundSize: `${64 * SKIN_PX}px ${64 * SKIN_PX}px`,
+    backgroundPosition: `-${x * SKIN_PX}px -${y * SKIN_PX}px`,
+    width: `${w * SKIN_PX}px`,
+    height: `${h * SKIN_PX}px`,
+    imageRendering: "pixelated",
+  };
+}
+
+/// Place a single cube face: centre it on the part origin, orient it, then push
+/// it out by half of the perpendicular dimension so six faces form a solid box.
+function faceTransform(face: keyof FaceRects, w: number, h: number, d: number): string {
+  const halfW = (w * SKIN_PX) / 2;
+  const halfH = (h * SKIN_PX) / 2;
+  const halfD = (d * SKIN_PX) / 2;
+  switch (face) {
+    case "front":
+      return `translate(-50%, -50%) translateZ(${halfD}px)`;
+    case "back":
+      return `translate(-50%, -50%) rotateY(180deg) translateZ(${halfD}px)`;
+    case "right":
+      return `translate(-50%, -50%) rotateY(-90deg) translateZ(${halfW}px)`;
+    case "left":
+      return `translate(-50%, -50%) rotateY(90deg) translateZ(${halfW}px)`;
+    case "top":
+      return `translate(-50%, -50%) rotateX(90deg) translateZ(${halfH}px)`;
+    case "bottom":
+      return `translate(-50%, -50%) rotateX(-90deg) translateZ(${halfH}px)`;
+  }
+}
+
+function SkinBox(props: { url: string; part: BodyPart }) {
+  const { part } = props;
+  const faces: (keyof FaceRects)[] = ["front", "back", "right", "left", "top", "bottom"];
+  const partTransform = `translate(-50%, -50%) translate3d(${part.x * SKIN_PX}px, ${part.y * SKIN_PX}px, 0)`;
+  return (
+    <div className="tui-skin-part" style={{ transform: partTransform }}>
+      {faces.map((face) => (
+        <span
+          key={`base-${face}`}
+          className="tui-skin-face"
+          style={{ ...faceTexture(props.url, part.base[face]), transform: faceTransform(face, part.w, part.h, part.d) }}
+        />
+      ))}
+      {part.overlay
+        ? faces.map((face) => (
+            <span
+              key={`overlay-${face}`}
+              className="tui-skin-face tui-skin-face-overlay"
+              style={{ ...faceTexture(props.url, part.overlay![face]), transform: faceTransform(face, part.w + 0.5, part.h + 0.5, part.d + 0.5) }}
+            />
+          ))
+        : null}
+    </div>
+  );
+}
+
 function SkinViewer(props: { skin: TuiAccountSkin | null; loading: boolean; username: string }) {
-  const [angle, setAngle] = useState(-22);
+  const [rotX, setRotX] = useState(-12);
+  const [rotY, setRotY] = useState(-24);
   const [spinning, setSpinning] = useState(true);
-  const dragRef = useRef<{ pointerId: number; startX: number; startAngle: number; moved: boolean } | null>(null);
+  const dragRef = useRef<{ pointerId: number; x: number; y: number; rotX: number; rotY: number } | null>(null);
 
   useEffect(() => {
     if (!spinning) return;
@@ -700,28 +899,29 @@ function SkinViewer(props: { skin: TuiAccountSkin | null; loading: boolean; user
     const step = (now: number) => {
       const delta = now - previous;
       previous = now;
-      setAngle((current) => current + delta * 0.035);
+      setRotY((current) => current + delta * 0.03);
       frame = window.requestAnimationFrame(step);
     };
     frame = window.requestAnimationFrame(step);
     return () => window.cancelAnimationFrame(frame);
   }, [spinning]);
 
-  const normalized = ((angle % 360) + 360) % 360;
   const skinUrl = props.skin?.dataUrl ?? null;
   const slim = props.skin?.model === "slim";
+  const parts = useMemo(() => bodyParts(slim), [slim]);
+  const normalizedY = ((rotY % 360) + 360) % 360;
+  const clampedX = Math.max(-90, Math.min(90, rotX));
 
   const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
-    dragRef.current = { pointerId: event.pointerId, startX: event.clientX, startAngle: angle, moved: false };
+    dragRef.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, rotX, rotY };
     setSpinning(false);
     event.currentTarget.setPointerCapture(event.pointerId);
   };
   const onPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
     const drag = dragRef.current;
     if (!drag || drag.pointerId !== event.pointerId) return;
-    const deltaX = event.clientX - drag.startX;
-    if (Math.abs(deltaX) > 2) drag.moved = true;
-    setAngle(drag.startAngle + deltaX * 0.7);
+    setRotY(drag.rotY + (event.clientX - drag.x) * 0.6);
+    setRotX(Math.max(-90, Math.min(90, drag.rotX - (event.clientY - drag.y) * 0.6)));
   };
   const endDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (dragRef.current?.pointerId === event.pointerId) dragRef.current = null;
@@ -739,75 +939,36 @@ function SkinViewer(props: { skin: TuiAccountSkin | null; loading: boolean; user
         onPointerCancel={endDrag}
       >
         {skinUrl ? (
-          <div className="tui-skin-model" style={{ transform: `rotateY(${normalized}deg)` }}>
-            <SkinFigure url={skinUrl} slim={slim} face="front" />
-            <SkinFigure url={skinUrl} slim={slim} face="back" />
+          <div className="tui-skin-scene">
+            <div
+              className="tui-skin-root"
+              style={{ transform: `rotateX(${clampedX}deg) rotateY(${normalizedY}deg)` }}
+            >
+              {parts.map((part) => (
+                <SkinBox key={part.key} url={skinUrl} part={part} />
+              ))}
+            </div>
           </div>
         ) : (
           <p className="tui-empty-state">{props.loading ? "LOADING SKIN..." : "NO SKIN"}</p>
         )}
       </div>
       <div className="tui-skin-controls">
+        <button type="button" className="tui-action-button" data-tui-nav-item onClick={() => setSpinning((value) => !value)}>
+          {spinning ? "PAUSE SPIN" : "AUTO SPIN"}
+        </button>
         <button
           type="button"
           className="tui-action-button"
           data-tui-nav-item
-          onClick={() => setSpinning((value) => !value)}
+          onClick={() => { setRotX(-12); setRotY(-24); }}
         >
-          {spinning ? "PAUSE SPIN" : "AUTO SPIN"}
+          RESET VIEW
         </button>
-        <span className="tui-skin-hint">Drag to rotate 360\u00b0{props.skin?.isDefault ? " \u00b7 default skin" : ""}</span>
+        <span className="tui-skin-hint">Drag to rotate{props.skin?.isDefault ? " · default skin" : ""}</span>
       </div>
     </div>
   );
-}
-
-/// Assemble a flat front/back "paper-doll" figure from the 64x64 skin sheet
-/// using absolute pixel offsets. Two figures are mounted back-to-back by the
-/// caller so a Y-rotation reads as a full 360 turn without a fragile per-voxel
-/// CSS model. Layout units are skin pixels * SKIN_SCALE.
-function SkinFigure(props: { url: string; slim: boolean; face: "front" | "back" }) {
-  const back = props.face === "back";
-  const armW = props.slim ? 3 : 4;
-  const headUv = back ? [24, 8] : [8, 8];
-  const bodyUv = back ? [32, 20] : [20, 20];
-  const armUv = back ? [52, 20] : [44, 20];
-  const legUv = back ? [12, 20] : [4, 20];
-  // Center column is 8px wide (body). Head sits above; arms flank the body;
-  // legs sit below split in half. Offsets are in skin pixels from figure left.
-  const bodyLeft = armW;
-  const cell = (uv: number[], w: number, h: number, left: number, top: number) => (
-    <span
-      className="tui-skin-cell"
-      style={{ ...region(props.url, uv[0], uv[1], w, h), left: `${left * SKIN_SCALE}px`, top: `${top * SKIN_SCALE}px` }}
-    />
-  );
-  return (
-    <div className="tui-skin-figure" style={{ width: `${(armW * 2 + 8) * SKIN_SCALE}px`, height: `${32 * SKIN_SCALE}px` }}>
-      {cell(headUv, 8, 8, bodyLeft, 0)}
-      {cell(armUv, armW, 12, 0, 8)}
-      {cell(bodyUv, 8, 12, bodyLeft, 8)}
-      {cell(armUv, armW, 12, bodyLeft + 8, 8)}
-      {cell(legUv, 4, 12, bodyLeft, 20)}
-      {cell(legUv, 4, 12, bodyLeft + 4, 20)}
-    </div>
-  );
-}
-
-const SKIN_SCALE = 6;
-
-/// Map a rectangular region of the 64x64 skin sheet to a scaled background tile.
-function region(url: string, x: number, y: number, w: number, h: number): CSSProperties {
-  return {
-    position: "absolute",
-    backgroundImage: `url("${url}")`,
-    backgroundRepeat: "no-repeat",
-    backgroundSize: `${64 * SKIN_SCALE}px ${64 * SKIN_SCALE}px`,
-    backgroundPosition: `-${x * SKIN_SCALE}px -${y * SKIN_SCALE}px`,
-    width: `${w * SKIN_SCALE}px`,
-    height: `${h * SKIN_SCALE}px`,
-    imageRendering: "pixelated",
-  };
 }
 
 function AccountScreen(props: {
