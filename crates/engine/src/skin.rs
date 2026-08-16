@@ -141,7 +141,7 @@ fn try_fetch_skin(uuid: &str) -> Result<PlayerSkin, SkinError> {
         Some(value) if value.eq_ignore_ascii_case("slim") => SkinModel::Slim,
         _ => SkinModel::Classic,
     };
-    let bytes = download_png(&client, &skin.url)?;
+    let bytes = download_png(&client, &https_texture_url(&skin.url))?;
     if !is_probably_png(&bytes) {
         return Ok(PlayerSkin::default_skin());
     }
@@ -169,16 +169,28 @@ fn download_png(client: &Client, url: &str) -> Result<Vec<u8>, SkinError> {
     Ok(bytes)
 }
 
-/// Mojang serves skin textures only from its own texture host. Restricting the
-/// download target keeps a tampered session response from turning the skin
-/// fetch into an arbitrary outbound request.
+/// Mojang serves skin textures only from its own texture host, but the session
+/// server still returns `http://` URLs for them. Restrict the download target
+/// to that single host (over http or https) so a tampered session response
+/// cannot turn the skin fetch into an arbitrary outbound request; the actual
+/// download is always upgraded to https by `https_texture_url`.
 fn is_approved_texture_url(url: &str) -> bool {
     match url::Url::parse(url) {
         Ok(parsed) => {
-            parsed.scheme() == "https"
+            matches!(parsed.scheme(), "http" | "https")
                 && matches!(parsed.host_str(), Some("textures.minecraft.net"))
         }
         Err(_) => false,
+    }
+}
+
+/// Force the approved texture host onto https before fetching the PNG so the
+/// launcher never downloads a skin over plaintext even though Mojang advertises
+/// an http URL.
+fn https_texture_url(url: &str) -> String {
+    match url.strip_prefix("http://") {
+        Some(rest) => format!("https://{rest}"),
+        None => url.to_owned(),
     }
 }
 
@@ -220,9 +232,22 @@ mod tests {
         assert!(is_approved_texture_url(
             "https://textures.minecraft.net/texture/abc123"
         ));
-        assert!(!is_approved_texture_url("http://textures.minecraft.net/x"));
+        // Mojang advertises http URLs for skins; the host is what matters.
+        assert!(is_approved_texture_url("http://textures.minecraft.net/x"));
         assert!(!is_approved_texture_url("https://evil.example.com/x"));
         assert!(!is_approved_texture_url("not a url"));
+    }
+
+    #[test]
+    fn texture_downloads_are_upgraded_to_https() {
+        assert_eq!(
+            https_texture_url("http://textures.minecraft.net/texture/abc"),
+            "https://textures.minecraft.net/texture/abc"
+        );
+        assert_eq!(
+            https_texture_url("https://textures.minecraft.net/texture/abc"),
+            "https://textures.minecraft.net/texture/abc"
+        );
     }
 
     #[test]
