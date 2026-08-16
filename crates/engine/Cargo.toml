@@ -11,6 +11,7 @@ license.workspace = true
 ui-preview-artifact = []
 
 [dependencies]
+base64.workspace = true
 fs2.workspace = true
 md5.workspace = true
 rayon.workspace = true

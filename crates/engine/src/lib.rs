@@ -6,6 +6,7 @@ mod layout;
 mod model;
 mod natives;
 mod rules;
+mod skin;
 
 pub use download::{DownloadOutcome, DownloadSpec, Downloader, verify_file};
 pub use forge::{
@@ -25,6 +26,7 @@ pub use layout::{MinecraftLayout, safe_join};
 pub use model::*;
 pub use natives::extract_natives;
 pub use rules::{RuleContext, library_is_allowed, native_classifier};
+pub use skin::{PlayerSkin, SkinModel, fetch_skin, skin_data_url};
 
 pub const MINECRAFT_VERSION: &str = "1.8.9";
 pub const MINECRAFT_VERSION_JSON_URL: &str = "https://piston-meta.mojang.com/v1/packages/d546f1707a3f2b7d034eece5ea2e311eda875787/1.8.9.json";

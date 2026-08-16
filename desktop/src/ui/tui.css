@@ -1106,3 +1106,147 @@ select:focus-visible {
     gap: var(--tui-space-md);
   }
 }
+
+/* ---- Identity detail: skin viewer + info ---- */
+.tui-identity-detail {
+  display: grid;
+  min-height: 0;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: var(--tui-space-md);
+}
+
+.tui-skin-viewer {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--tui-space-sm);
+}
+
+.tui-skin-stage {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 300px;
+  border: 1px solid var(--tui-border);
+  background:
+    radial-gradient(circle at 50% 38%, rgba(85, 167, 255, 0.12), transparent 60%),
+    repeating-linear-gradient(0deg, #070707, #070707 12px, #0b0b0b 12px, #0b0b0b 24px);
+  perspective: 900px;
+  cursor: grab;
+  overflow: hidden;
+  touch-action: none;
+}
+
+.tui-skin-stage:active {
+  cursor: grabbing;
+}
+
+.tui-skin-model {
+  position: relative;
+  width: 96px;
+  height: 192px;
+  transform-style: preserve-3d;
+  will-change: transform;
+}
+
+/* Two flat figures mounted back-to-back so a Y rotation reads as a 360 turn. */
+.tui-skin-figure {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  transform: translateX(-50%);
+  backface-visibility: hidden;
+}
+
+.tui-skin-figure.is-front {
+  transform: translateX(-50%) translateZ(9px);
+}
+
+.tui-skin-figure.is-back {
+  transform: translateX(-50%) rotateY(180deg) translateZ(9px);
+}
+
+.tui-skin-cell {
+  display: block;
+}
+
+.tui-skin-controls {
+  display: flex;
+  align-items: center;
+  gap: var(--tui-space-md);
+}
+
+.tui-skin-hint {
+  color: var(--tui-quiet);
+  font-size: 9px;
+}
+
+.tui-identity-info {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  gap: var(--tui-space-md);
+  overflow-y: auto;
+}
+
+/* ---- Add-account modal ---- */
+.tui-add-account {
+  width: min(520px, 100%);
+}
+
+.tui-add-choice {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--tui-space-md);
+  padding: var(--tui-space-lg);
+}
+
+.tui-choice-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: var(--tui-space-lg) var(--tui-space-md);
+  border: 1px solid var(--tui-border-strong);
+  background: var(--tui-surface-raised);
+  color: var(--tui-foreground);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.tui-choice-card strong {
+  font-size: 14px;
+  letter-spacing: 0.04em;
+}
+
+.tui-choice-card span {
+  color: var(--tui-muted);
+  font-size: 11px;
+}
+
+.tui-choice-note {
+  color: var(--tui-quiet) !important;
+  font-size: 9px !important;
+}
+
+.tui-choice-card:hover:not(:disabled),
+.tui-choice-card:focus-visible:not(:disabled) {
+  border-color: var(--tui-focus);
+  outline: none;
+}
+
+.tui-choice-card:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.tui-modal-buttons {
+  display: flex;
+  gap: var(--tui-space-sm);
+  justify-content: flex-end;
+}
+
+.tui-add-account .tui-form-stack {
+  padding: var(--tui-space-lg);
+}

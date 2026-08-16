@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import {
   CommandBar,
   KeyValueList,
@@ -60,6 +60,12 @@ export type TuiInstance = {
   logDirectory: string;
 };
 
+export type TuiAccountSkin = {
+  dataUrl: string;
+  model: "classic" | "slim";
+  isDefault: boolean;
+};
+
 export type TuiSnapshot = {
   platform: string;
   dataDirectory: string;
@@ -110,6 +116,8 @@ type LauncherTuiProps = {
   loginCancelling: boolean;
   runningSessions: Record<string, string>;
   instances: readonly TuiInstance[];
+  skin: TuiAccountSkin | null;
+  skinLoading: boolean;
   qaUsername: string;
   optifineSourcePath: string;
   onNavigate: (page: TuiPage) => void;
@@ -547,6 +555,8 @@ export default function LauncherTui(props: LauncherTuiProps) {
             accounts={accounts}
             selectedAccountId={selectedAccount?.id ?? null}
             activeAccountIds={activeAccountIds}
+            skin={props.skin}
+            skinLoading={props.skinLoading}
             qaUsername={props.qaUsername}
             busy={props.busy}
             loginCancelling={props.loginCancelling}
@@ -678,6 +688,128 @@ function InstallationScreen(props: {
   );
 }
 
+function SkinViewer(props: { skin: TuiAccountSkin | null; loading: boolean; username: string }) {
+  const [angle, setAngle] = useState(-22);
+  const [spinning, setSpinning] = useState(true);
+  const dragRef = useRef<{ pointerId: number; startX: number; startAngle: number; moved: boolean } | null>(null);
+
+  useEffect(() => {
+    if (!spinning) return;
+    let frame = 0;
+    let previous = performance.now();
+    const step = (now: number) => {
+      const delta = now - previous;
+      previous = now;
+      setAngle((current) => current + delta * 0.035);
+      frame = window.requestAnimationFrame(step);
+    };
+    frame = window.requestAnimationFrame(step);
+    return () => window.cancelAnimationFrame(frame);
+  }, [spinning]);
+
+  const normalized = ((angle % 360) + 360) % 360;
+  const skinUrl = props.skin?.dataUrl ?? null;
+  const slim = props.skin?.model === "slim";
+
+  const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    dragRef.current = { pointerId: event.pointerId, startX: event.clientX, startAngle: angle, moved: false };
+    setSpinning(false);
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+  const onPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const drag = dragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    const deltaX = event.clientX - drag.startX;
+    if (Math.abs(deltaX) > 2) drag.moved = true;
+    setAngle(drag.startAngle + deltaX * 0.7);
+  };
+  const endDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (dragRef.current?.pointerId === event.pointerId) dragRef.current = null;
+  };
+
+  return (
+    <div className="tui-skin-viewer">
+      <div
+        className="tui-skin-stage"
+        role="img"
+        aria-label={`3D skin preview for ${props.username}`}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={endDrag}
+        onPointerCancel={endDrag}
+      >
+        {skinUrl ? (
+          <div className="tui-skin-model" style={{ transform: `rotateY(${normalized}deg)` }}>
+            <SkinFigure url={skinUrl} slim={slim} face="front" />
+            <SkinFigure url={skinUrl} slim={slim} face="back" />
+          </div>
+        ) : (
+          <p className="tui-empty-state">{props.loading ? "LOADING SKIN..." : "NO SKIN"}</p>
+        )}
+      </div>
+      <div className="tui-skin-controls">
+        <button
+          type="button"
+          className="tui-action-button"
+          data-tui-nav-item
+          onClick={() => setSpinning((value) => !value)}
+        >
+          {spinning ? "PAUSE SPIN" : "AUTO SPIN"}
+        </button>
+        <span className="tui-skin-hint">Drag to rotate 360\u00b0{props.skin?.isDefault ? " \u00b7 default skin" : ""}</span>
+      </div>
+    </div>
+  );
+}
+
+/// Assemble a flat front/back "paper-doll" figure from the 64x64 skin sheet
+/// using absolute pixel offsets. Two figures are mounted back-to-back by the
+/// caller so a Y-rotation reads as a full 360 turn without a fragile per-voxel
+/// CSS model. Layout units are skin pixels * SKIN_SCALE.
+function SkinFigure(props: { url: string; slim: boolean; face: "front" | "back" }) {
+  const back = props.face === "back";
+  const armW = props.slim ? 3 : 4;
+  const headUv = back ? [24, 8] : [8, 8];
+  const bodyUv = back ? [32, 20] : [20, 20];
+  const armUv = back ? [52, 20] : [44, 20];
+  const legUv = back ? [12, 20] : [4, 20];
+  // Center column is 8px wide (body). Head sits above; arms flank the body;
+  // legs sit below split in half. Offsets are in skin pixels from figure left.
+  const bodyLeft = armW;
+  const cell = (uv: number[], w: number, h: number, left: number, top: number) => (
+    <span
+      className="tui-skin-cell"
+      style={{ ...region(props.url, uv[0], uv[1], w, h), left: `${left * SKIN_SCALE}px`, top: `${top * SKIN_SCALE}px` }}
+    />
+  );
+  return (
+    <div className="tui-skin-figure" style={{ width: `${(armW * 2 + 8) * SKIN_SCALE}px`, height: `${32 * SKIN_SCALE}px` }}>
+      {cell(headUv, 8, 8, bodyLeft, 0)}
+      {cell(armUv, armW, 12, 0, 8)}
+      {cell(bodyUv, 8, 12, bodyLeft, 8)}
+      {cell(armUv, armW, 12, bodyLeft + 8, 8)}
+      {cell(legUv, 4, 12, bodyLeft, 20)}
+      {cell(legUv, 4, 12, bodyLeft + 4, 20)}
+    </div>
+  );
+}
+
+const SKIN_SCALE = 6;
+
+/// Map a rectangular region of the 64x64 skin sheet to a scaled background tile.
+function region(url: string, x: number, y: number, w: number, h: number): CSSProperties {
+  return {
+    position: "absolute",
+    backgroundImage: `url("${url}")`,
+    backgroundRepeat: "no-repeat",
+    backgroundSize: `${64 * SKIN_SCALE}px ${64 * SKIN_SCALE}px`,
+    backgroundPosition: `-${x * SKIN_SCALE}px -${y * SKIN_SCALE}px`,
+    width: `${w * SKIN_SCALE}px`,
+    height: `${h * SKIN_SCALE}px`,
+    imageRendering: "pixelated",
+  };
+}
+
 function AccountScreen(props: {
   isQaOfflineEdition: boolean;
   snapshotPending: boolean;
@@ -685,6 +817,8 @@ function AccountScreen(props: {
   accounts: readonly TuiAccount[];
   selectedAccountId: string | null;
   activeAccountIds: ReadonlySet<string>;
+  skin: TuiAccountSkin | null;
+  skinLoading: boolean;
   qaUsername: string;
   busy: string | null;
   loginCancelling: boolean;
@@ -700,10 +834,22 @@ function AccountScreen(props: {
   onRefresh: () => void;
 }) {
   const [pendingRemoveId, setPendingRemoveId] = useState<string | null>(null);
+  const [addOpen, setAddOpen] = useState(false);
+  const [addMode, setAddMode] = useState<"choose" | "unofficial">("choose");
   const qaUsernameValid = /^[A-Za-z0-9_]{3,16}$/.test(props.qaUsername);
   const selectedAccount = props.accounts.find((account) => account.id === props.selectedAccountId) ?? null;
   const selectedRunning = selectedAccount ? props.activeAccountIds.has(selectedAccount.id) : false;
   useEffect(() => setPendingRemoveId(null), [props.selectedAccountId]);
+
+  const closeAdd = useCallback(() => {
+    setAddOpen(false);
+    setAddMode("choose");
+  }, []);
+
+  useEffect(() => {
+    if (props.busy === "offline-profile" && props.qaUsername === "") closeAdd();
+  }, [closeAdd, props.busy, props.qaUsername]);
+
   const accountRows: readonly KeyValueRow[] = [
     { label: "Identity", value: selectedAccount?.username ?? "NONE", tone: selectedAccount?.ready ? "success" : "warning" },
     { label: "Prefix", value: selectedAccount ? `[${selectedAccount.badge.toUpperCase()}]` : "NONE", tone: selectedAccount ? "warning" : "muted" },
@@ -712,6 +858,7 @@ function AccountScreen(props: {
     { label: "Instance", value: selectedRunning ? "RUNNING" : "IDLE", tone: selectedRunning ? "warning" : "muted" },
     { label: "UUID", value: selectedAccount?.uuid ? compactUuid(selectedAccount.uuid) : "MIGRATES ON LAUNCH", tone: "muted" },
   ];
+
   return (
     <div className="tui-page-grid">
       <Pane title={`IDENTITIES / ${props.accounts.length}`}>
@@ -740,73 +887,112 @@ function AccountScreen(props: {
           })}
         </div>
         <div className="tui-pane-actions tui-pane-actions--stacked">
-          {!props.isQaOfflineEdition ? (
-            <button
-              type="button"
-              className="tui-action-button is-primary"
-              data-tui-nav-item
-              disabled={props.snapshotPending || props.busy !== null || props.developerTestProfileActive}
-              onClick={props.snapshotUnavailable ? props.onRefresh : props.onStartMicrosoftLogin}
-            >
-              {props.snapshotPending
-                ? "CHECKING..."
-                : props.snapshotUnavailable
-                  ? "REFRESH"
-                  : props.accounts.length > 0
-                    ? "ADD ANOTHER MICROSOFT ACCOUNT"
-                    : "ADD MICROSOFT ACCOUNT"}
-            </button>
-          ) : null}
+          <button
+            type="button"
+            className="tui-action-button is-primary"
+            data-tui-nav-item
+            disabled={props.snapshotPending || props.busy !== null}
+            onClick={props.snapshotUnavailable ? props.onRefresh : () => { setAddMode("choose"); setAddOpen(true); }}
+          >
+            {props.snapshotPending ? "CHECKING..." : props.snapshotUnavailable ? "REFRESH" : "ADD ACCOUNT"}
+          </button>
           <button type="button" className="tui-action-button" data-tui-nav-item disabled={props.busy !== null} onClick={props.onRefresh}>REFRESH LIST</button>
         </div>
       </Pane>
+
       <Pane title="IDENTITY MANAGER">
-        <KeyValueList rows={accountRows} />
-        <div className="tui-account-manager">
-          <div className="tui-form-stack">
-            <label htmlFor="tui-qa-username">New unofficial profile</label>
-            <input
-              id="tui-qa-username"
-              type="text"
-              value={props.qaUsername}
-              minLength={3}
-              maxLength={16}
-              spellCheck={false}
-              placeholder="Minecraft username"
-              onChange={(event) => props.onQaUsernameChange(event.target.value)}
-              disabled={props.busy !== null || props.snapshotPending}
-            />
-            <p className={qaUsernameValid ? "tui-help is-valid" : "tui-help"}>3-16 letters, numbers, or underscores.</p>
-            <button type="button" className="tui-action-button" data-tui-nav-item disabled={!qaUsernameValid || props.busy !== null || props.snapshotUnavailable} onClick={props.onSaveQaProfile}>
-              ADD UNOFFICIAL PROFILE
-            </button>
+        <div className="tui-identity-detail">
+          <SkinViewer skin={props.skin} loading={props.skinLoading} username={selectedAccount?.username ?? "NONE"} />
+          <div className="tui-identity-info">
+            <KeyValueList rows={accountRows} />
+            <div className="tui-account-manager">
+              {selectedAccount ? (
+                <button
+                  type="button"
+                  className="tui-action-button is-danger"
+                  data-tui-nav-item
+                  disabled={props.busy !== null || selectedRunning}
+                  onClick={() => {
+                    if (pendingRemoveId === selectedAccount.id) props.onRemoveAccount(selectedAccount.id);
+                    else setPendingRemoveId(selectedAccount.id);
+                  }}
+                >
+                  {selectedRunning ? "INSTANCE IS RUNNING" : pendingRemoveId === selectedAccount.id ? "CONFIRM REMOVE" : "REMOVE SELECTED"}
+                </button>
+              ) : <p className="tui-empty-state">SELECT AN IDENTITY</p>}
+              {props.busy === "login" ? (
+                <button type="button" className="tui-action-button" disabled={props.loginCancelling} onClick={props.onCancelMicrosoftLogin}>
+                  {props.loginCancelling ? "CANCELLING..." : "CANCEL SIGN-IN"}
+                </button>
+              ) : null}
+              {props.developerTestProfileActive ? (
+                <button type="button" className="tui-action-button" data-tui-nav-item disabled={props.developerSimulationActive || props.busy !== null} onClick={props.onRunDeveloperSimulation}>
+                  {props.developerSimulationActive ? "SIMULATION RUNNING" : "RUN DEVELOPER SIMULATION"}
+                </button>
+              ) : null}
+            </div>
           </div>
-          {selectedAccount ? (
-            <button
-              type="button"
-              className="tui-action-button is-danger"
-              data-tui-nav-item
-              disabled={props.busy !== null || selectedRunning}
-              onClick={() => {
-                if (pendingRemoveId === selectedAccount.id) props.onRemoveAccount(selectedAccount.id);
-                else setPendingRemoveId(selectedAccount.id);
-              }}
-            >
-              {selectedRunning ? "INSTANCE IS RUNNING" : pendingRemoveId === selectedAccount.id ? "CONFIRM REMOVE" : "REMOVE SELECTED"}
-            </button>
-          ) : null}
-          {props.busy === "login" ? (
-            <button type="button" className="tui-action-button" disabled={props.loginCancelling} onClick={props.onCancelMicrosoftLogin}>
-              {props.loginCancelling ? "CANCELLING..." : "CANCEL SIGN-IN"}
-            </button>
-          ) : null}
-          {props.developerTestProfileActive ? (
-            <button type="button" className="tui-action-button" data-tui-nav-item disabled={props.developerSimulationActive || props.busy !== null} onClick={props.onRunDeveloperSimulation}>
-              {props.developerSimulationActive ? "SIMULATION RUNNING" : "RUN DEVELOPER SIMULATION"}
-            </button>
-          ) : null}
         </div>
       </Pane>
+
+      {addOpen ? (
+        <div className="tui-modal-layer" role="dialog" aria-modal="true" aria-labelledby="tui-add-account-title" onClick={closeAdd}>
+          <section className="tui-modal tui-add-account" onClick={(event) => event.stopPropagation()}>
+            <header>
+              <span id="tui-add-account-title">ADD ACCOUNT</span>
+              <button type="button" className="tui-modal-action" onClick={closeAdd}>CLOSE</button>
+            </header>
+            {addMode === "choose" ? (
+              <div className="tui-add-choice">
+                <button
+                  type="button"
+                  className="tui-choice-card"
+                  disabled={props.busy !== null || props.snapshotUnavailable}
+                  onClick={() => { closeAdd(); props.onStartMicrosoftLogin(); }}
+                >
+                  <strong>OFFICIAL</strong>
+                  <span>Microsoft account</span>
+                  <span className="tui-choice-note">Java Edition ownership verified · real skin</span>
+                </button>
+                <button
+                  type="button"
+                  className="tui-choice-card"
+                  disabled={props.busy !== null}
+                  onClick={() => setAddMode("unofficial")}
+                >
+                  <strong>UNOFFICIAL</strong>
+                  <span>Offline profile</span>
+                  <span className="tui-choice-note">Username only · no online play</span>
+                </button>
+              </div>
+            ) : (
+              <div className="tui-form-stack">
+                <label htmlFor="tui-qa-username">Unofficial username</label>
+                <input
+                  id="tui-qa-username"
+                  type="text"
+                  value={props.qaUsername}
+                  minLength={3}
+                  maxLength={16}
+                  spellCheck={false}
+                  autoFocus
+                  placeholder="Minecraft username"
+                  onChange={(event) => props.onQaUsernameChange(event.target.value)}
+                  disabled={props.busy !== null}
+                  onKeyDown={(event) => { if (event.key === "Enter" && qaUsernameValid) props.onSaveQaProfile(); }}
+                />
+                <p className={qaUsernameValid ? "tui-help is-valid" : "tui-help"}>3-16 letters, numbers, or underscores.</p>
+                <div className="tui-modal-buttons">
+                  <button type="button" className="tui-action-button" onClick={() => setAddMode("choose")} disabled={props.busy !== null}>BACK</button>
+                  <button type="button" className="tui-action-button is-primary" disabled={!qaUsernameValid || props.busy !== null} onClick={props.onSaveQaProfile}>
+                    ADD UNOFFICIAL PROFILE
+                  </button>
+                </div>
+              </div>
+            )}
+          </section>
+        </div>
+      ) : null}
     </div>
   );
 }

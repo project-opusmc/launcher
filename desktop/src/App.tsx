@@ -64,6 +64,12 @@ type RunningInstance = {
   logDirectory: string;
 };
 
+type AccountSkin = {
+  dataUrl: string;
+  model: "classic" | "slim";
+  isDefault: boolean;
+};
+
 type UtilitySettings = {
   schemaVersion: number;
   utilities: Record<TuiUtilityId, TuiUtilityPreference>;
@@ -251,6 +257,9 @@ export default function App() {
   const [loginCancelling, setLoginCancelling] = useState(false);
   const [runningSessions, setRunningSessions] = useState<Record<string, string>>({});
   const [instances, setInstances] = useState<RunningInstance[]>([]);
+  const [skin, setSkin] = useState<AccountSkin | null>(null);
+  const [skinLoading, setSkinLoading] = useState(false);
+  const skinRequestRef = useRef(0);
   const [qaUsername, setQaUsername] = useState("");
   const [optifineSourcePath, setOptifineSourcePath] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
@@ -310,6 +319,32 @@ export default function App() {
     const timer = window.setInterval(() => void refreshInstances(), 2000);
     return () => window.clearInterval(timer);
   }, [refreshInstances]);
+
+  const selectedAccountId = snapshot?.selectedAccountId ?? null;
+  const selectedAccountUuid = snapshot?.accounts.find((account) => account.id === selectedAccountId)?.uuid ?? null;
+  useEffect(() => {
+    if (!isTauriRuntime()) {
+      setSkin(null);
+      return;
+    }
+    if (!selectedAccountId) {
+      setSkin(null);
+      return;
+    }
+    const requestId = skinRequestRef.current + 1;
+    skinRequestRef.current = requestId;
+    setSkinLoading(true);
+    void invoke<AccountSkin>("account_skin", { uuid: selectedAccountUuid ?? "" })
+      .then((next) => {
+        if (skinRequestRef.current === requestId) setSkin(next);
+      })
+      .catch(() => {
+        if (skinRequestRef.current === requestId) setSkin(null);
+      })
+      .finally(() => {
+        if (skinRequestRef.current === requestId) setSkinLoading(false);
+      });
+  }, [selectedAccountId, selectedAccountUuid]);
 
   useEffect(() => {
     if (!notice) return;
@@ -583,6 +618,8 @@ export default function App() {
       loginCancelling={loginCancelling}
       runningSessions={runningSessions}
       instances={instances}
+      skin={skin}
+      skinLoading={skinLoading}
       qaUsername={qaUsername}
       optifineSourcePath={optifineSourcePath}
       onNavigate={setPage}

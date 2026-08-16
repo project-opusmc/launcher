@@ -903,6 +903,30 @@ fn remove_account(account_id: String) -> Result<bool, String> {
     accounts::remove(&paths, account_id.trim())
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AccountSkin {
+    data_url: String,
+    model: String,
+    is_default: bool,
+}
+
+/// Resolve the 3D-viewer skin for an account UUID. Offline profiles and any
+/// network failure fall back to the embedded default skin, so the account pane
+/// always has a texture to render. Runs on a blocking thread because it may hit
+/// the Mojang session server.
+#[tauri::command]
+async fn account_skin(uuid: String) -> Result<AccountSkin, String> {
+    let skin = tauri::async_runtime::spawn_blocking(move || opus_engine::fetch_skin(uuid.trim()))
+        .await
+        .map_err(|error| format!("skin task failed: {error}"))?;
+    Ok(AccountSkin {
+        data_url: opus_engine::skin_data_url(&skin),
+        model: skin.model.as_str().to_owned(),
+        is_default: skin.is_default,
+    })
+}
+
 /// Read the QA-only offline profile. Premium builds do not register this
 /// command, so the browser frontend can never create an unauthenticated
 /// Premium launch identity.
@@ -1660,6 +1684,7 @@ pub fn run() {
             select_account,
             save_offline_profile,
             remove_account,
+            account_skin,
             get_qa_profile,
             save_qa_profile,
             launch_game,
@@ -1686,6 +1711,7 @@ pub fn run() {
             select_account,
             save_offline_profile,
             remove_account,
+            account_skin,
             login_with_microsoft,
             cancel_microsoft_login,
             launch_game,
@@ -1713,6 +1739,7 @@ pub fn run() {
             select_account,
             save_offline_profile,
             remove_account,
+            account_skin,
             login_with_microsoft,
             cancel_microsoft_login,
             launch_game,
