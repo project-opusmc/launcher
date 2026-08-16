@@ -67,6 +67,21 @@ struct AppState {
 #[derive(Default)]
 struct GameLaunchCoordinator {
     active: Mutex<BTreeMap<String, usize>>,
+    instances: Mutex<BTreeMap<String, RunningInstance>>,
+}
+
+/// A live game instance the launcher is tracking. It is intentionally free of
+/// tokens, paths outside the launcher's own log directory, and any secret so it
+/// can be serialized straight to the UI's instance manager.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RunningInstance {
+    session_id: String,
+    account_id: String,
+    username: String,
+    badge: String,
+    title: String,
+    log_directory: String,
 }
 
 struct GameLaunchAttempt {
@@ -107,6 +122,37 @@ impl GameLaunchCoordinator {
             .keys()
             .cloned()
             .collect()
+    }
+
+    fn register_instance(&self, instance: RunningInstance) {
+        self.instances
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(instance.session_id.clone(), instance);
+    }
+
+    fn remove_instance(&self, session_id: &str) {
+        self.instances
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(session_id);
+    }
+
+    fn list_instances(&self) -> Vec<RunningInstance> {
+        self.instances
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .values()
+            .cloned()
+            .collect()
+    }
+
+    fn instance(&self, session_id: &str) -> Option<RunningInstance> {
+        self.instances
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(session_id)
+            .cloned()
     }
 }
 
@@ -589,6 +635,8 @@ struct PreparedGameLaunch {
     macos_game_app: Option<PathBuf>,
     account_id: String,
     username: String,
+    badge: String,
+    window_title: String,
 }
 
 struct ForgeBootstrapArtifacts {
@@ -971,6 +1019,18 @@ async fn launch_game(
     let event_session_id = session_id.clone();
     let event_log_directory = log_directory.clone();
     let event_account_id = account_id.clone();
+    // Publish the live instance so the UI's instance manager can show a labeled
+    // row and offer an explicit kill. Removed again when the game lifecycle ends.
+    state.game_launch.register_instance(RunningInstance {
+        session_id: session_id.clone(),
+        account_id: account_id.clone(),
+        username: username.clone(),
+        badge: prepared.badge.clone(),
+        title: prepared.window_title.clone(),
+        log_directory: prepared.plan.log_directory.display().to_string(),
+    });
+    let coordinator_for_wait = Arc::clone(&state.game_launch);
+    let wait_session_id = session_id.clone();
     let app_for_wait = app.clone();
     std::thread::spawn(move || {
         let _launch_attempt = launch_attempt;
@@ -978,6 +1038,7 @@ async fn launch_game(
             Some(game_app) => launch_game_via_macos_app(prepared.plan, &game_app),
             None => launch_direct_game(prepared.plan),
         };
+        coordinator_for_wait.remove_instance(&wait_session_id);
         let event = match result {
             Ok(result) => GameLaunchFinished {
                 session_id: result.session_id,
@@ -1013,6 +1074,62 @@ async fn launch_game(
         account_id,
         simulated: false,
     })
+}
+
+/// List the game instances the launcher is currently tracking so the UI can
+/// render an instance manager. Payload-free by construction.
+#[tauri::command]
+fn list_instances(state: tauri::State<'_, AppState>) -> Vec<RunningInstance> {
+    state.game_launch.list_instances()
+}
+
+/// Terminate a tracked game instance by session id. The launcher started the
+/// JVM through the macOS game stub, so the game JVM records its own pid beside
+/// the session status file; the launcher signals that pid directly. The
+/// coordinator entry is removed by the waiting launch thread when the process
+/// exits, which also emits the normal `opus://game-finished` event.
+#[tauri::command]
+fn kill_instance(state: tauri::State<'_, AppState>, session_id: String) -> Result<(), String> {
+    let session_id = session_id.trim();
+    if session_id.is_empty() {
+        return Err("Missing instance id".to_owned());
+    }
+    let Some(instance) = state.game_launch.instance(session_id) else {
+        return Err("That Minecraft instance is no longer running.".to_owned());
+    };
+    terminate_instance_process(Path::new(&instance.log_directory))
+}
+
+/// Read the game JVM pid recorded by the Opus bootstrap and send it SIGTERM.
+/// The pid file lives inside the launcher-owned session log directory. Refuse
+/// anything that is not a positive integer so nothing else can be signaled.
+fn terminate_instance_process(log_directory: &Path) -> Result<(), String> {
+    let pid_path = log_directory.join("game.pid");
+    let raw = fs::read_to_string(&pid_path).map_err(|_| {
+        "Could not read the instance process id yet. Try again in a moment.".to_owned()
+    })?;
+    let pid: u32 = raw
+        .trim()
+        .parse()
+        .map_err(|_| "The instance process id is invalid.".to_owned())?;
+    if pid <= 1 {
+        return Err("The instance process id is invalid.".to_owned());
+    }
+    // Signal the recorded game pid with the system `kill`. Using a validated
+    // positive integer and an absolute binary path keeps this free of shell
+    // interpolation. A non-zero exit almost always means the process already
+    // exited, which the launch wait thread settles on its own; treat it as
+    // success so the instance manager does not surface a spurious error.
+    let status = std::process::Command::new("/bin/kill")
+        .arg("-TERM")
+        .arg(pid.to_string())
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map_err(|error| format!("Could not stop the instance: {error}"))?;
+    let _ = status;
+    Ok(())
 }
 
 /// Opt into an in-memory developer profile for local UI work. This command is
@@ -1267,6 +1384,18 @@ fn validate_qa_profile(profile: &QaProfile) -> Result<(), String> {
         })
 }
 
+/// Compose the per-instance game window title so concurrently running
+/// instances are distinguishable, e.g. "Opus Client - [OFFICIAL] zvwgvx".
+/// A blank badge degrades gracefully to "Opus Client - <username>".
+fn instance_window_title(badge: &str, username: &str) -> String {
+    let badge = badge.trim();
+    if badge.is_empty() {
+        format!("Opus Client - {username}")
+    } else {
+        format!("Opus Client - [{}] {username}", badge.to_uppercase())
+    }
+}
+
 fn prepare_game_launch(
     app: &AppHandle,
     settings: &LauncherSettings,
@@ -1286,7 +1415,9 @@ fn prepare_game_launch(
     let report = installer.load_cached().map_err(|error| {
         format!("Minecraft 1.8.9 is not ready. Use Install / Repair first. ({error})")
     })?;
-    let (identity, account_id, username) = resolve_launch_identity(&paths, requested_account_id)?;
+    let (identity, account_id, username, badge) =
+        resolve_launch_identity(&paths, requested_account_id)?;
+    let window_title = instance_window_title(&badge, &username);
     let mut instance_paths = paths.clone();
     instance_paths.game = paths
         .root
@@ -1311,6 +1442,7 @@ fn prepare_game_launch(
             max_memory_mib: settings.max_memory_mib,
             utility_settings_file: Some(utility_settings_path()?),
             brand_wordmark_file: Some(brand_wordmark_path(app)?),
+            window_title: Some(window_title.clone()),
             ..LaunchOptions::default()
         },
         &LaunchMode::ForgeBootstrap {
@@ -1326,13 +1458,15 @@ fn prepare_game_launch(
         macos_game_app,
         account_id,
         username,
+        badge,
+        window_title,
     })
 }
 
 fn resolve_launch_identity(
     paths: &OpusPaths,
     requested_account_id: &str,
-) -> Result<(GameIdentity, String, String), String> {
+) -> Result<(GameIdentity, String, String, String), String> {
     let view = accounts::load(paths)?;
     let account_id = if requested_account_id.trim().is_empty() {
         accounts::selected_id(&view).ok_or_else(|| {
@@ -1345,7 +1479,8 @@ fn resolve_launch_identity(
         ResolvedAccount::Offline(record) => {
             let identity = GameIdentity::offline(&record.username).map_err(display_error)?;
             let username = identity.username.clone();
-            Ok((identity, record.id, username))
+            let badge = record.badge.clone();
+            Ok((identity, record.id, username, badge))
         }
         ResolvedAccount::Microsoft(record) => {
             #[cfg(feature = "qa-edition")]
@@ -1376,7 +1511,8 @@ fn resolve_launch_identity(
                 )
                 .map_err(display_error)?;
                 let username = identity.username.clone();
-                Ok((identity, summary.id, username))
+                let badge = summary.badge.clone();
+                Ok((identity, summary.id, username, badge))
             }
         }
     }
@@ -1527,6 +1663,8 @@ pub fn run() {
             get_qa_profile,
             save_qa_profile,
             launch_game,
+            list_instances,
+            kill_instance,
         ]);
 
     #[cfg(all(
@@ -1551,6 +1689,8 @@ pub fn run() {
             login_with_microsoft,
             cancel_microsoft_login,
             launch_game,
+            list_instances,
+            kill_instance,
             set_developer_test_profile,
             simulate_developer_game,
         ]);
@@ -1576,6 +1716,8 @@ pub fn run() {
             login_with_microsoft,
             cancel_microsoft_login,
             launch_game,
+            list_instances,
+            kill_instance,
         ]);
 
     builder

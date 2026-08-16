@@ -51,6 +51,15 @@ export type TuiAccount = {
   selected: boolean;
 };
 
+export type TuiInstance = {
+  sessionId: string;
+  accountId: string;
+  username: string;
+  badge: string;
+  title: string;
+  logDirectory: string;
+};
+
 export type TuiSnapshot = {
   platform: string;
   dataDirectory: string;
@@ -100,9 +109,12 @@ type LauncherTuiProps = {
   installProgress: TuiInstallProgress | null;
   loginCancelling: boolean;
   runningSessions: Record<string, string>;
+  instances: readonly TuiInstance[];
   qaUsername: string;
   optifineSourcePath: string;
   onNavigate: (page: TuiPage) => void;
+  onBack: () => void;
+  onKillInstance: (sessionId: string) => void;
   onRefresh: () => void;
   onLaunch: (accountId: string) => void;
   onInstall: () => void;
@@ -427,8 +439,14 @@ export default function LauncherTui(props: LauncherTuiProps) {
     <main className="tui-app">
       <header className="tui-header">
         <div className="tui-header-brand">
+          {normalizedPage !== "home" ? (
+            <button type="button" className="tui-header-back" onClick={props.onBack} aria-label="Back to menu">
+              <span aria-hidden="true">&lt;</span>
+              BACK
+            </button>
+          ) : null}
           <img className="tui-brand-mark" src="/brand/opus-mark-64.png" alt="" />
-          <strong>OPUS LAUNCHER</strong>
+          <span className="tui-header-title">OPUS LAUNCHER</span>
           <span className="tui-header-state"><StatusText value={runtimeState} tone={readyToLaunch || activeLaunchCount > 0 ? "success" : "warning"} /></span>
         </div>
         <div className="tui-header-meta">
@@ -499,6 +517,7 @@ export default function LauncherTui(props: LauncherTuiProps) {
               onClick={() => focusPane(3)}
             >
               <KeyValueList rows={sessionRows} />
+              <InstanceManager instances={props.instances} busy={props.busy} onKill={props.onKillInstance} />
             </Pane>
           </div>
         ) : null}
@@ -971,6 +990,43 @@ function LogsScreen(props: {
       <Pane title={props.category.toUpperCase()} footer={<span>DATA: {props.dataDirectory}</span>}>
         <LogView lines={props.lines} />
       </Pane>
+    </div>
+  );
+}
+
+function InstanceManager(props: {
+  instances: readonly TuiInstance[];
+  busy: string | null;
+  onKill: (sessionId: string) => void;
+}) {
+  return (
+    <div className="tui-instance-manager">
+      <div className="tui-instance-manager-head">
+        <span>ACTIVE INSTANCES</span>
+        <strong>{String(props.instances.length).padStart(2, "0")}</strong>
+      </div>
+      {props.instances.length === 0 ? (
+        <p className="tui-instance-empty">No running instances.</p>
+      ) : (
+        <ul className="tui-instance-list">
+          {props.instances.map((instance) => (
+            <li key={instance.sessionId} className="tui-instance-row">
+              <span className={`tui-account-badge ${badgeToneClass(instance.badge)}`}>[{instance.badge.toUpperCase()}]</span>
+              <span className="tui-instance-name" title={instance.title}>{instance.username}</span>
+              <StatusText value="RUNNING" tone="warning" />
+              <button
+                type="button"
+                className="tui-instance-kill"
+                data-tui-nav-item
+                disabled={props.busy !== null}
+                onClick={() => props.onKill(instance.sessionId)}
+              >
+                KILL
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }

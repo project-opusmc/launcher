@@ -8,8 +8,8 @@ pub const FORGE_OPTIFINE_FILE_NAME: &str = "OptiFine_1.8.9_HD_U_M5.jar";
 /// The reproducible Opus coremod artifact staged beside the desktop launcher.
 /// All launcher flavors use the same reviewed bytes so QA/Premium artifact
 /// drift cannot produce a build that installs successfully but cannot launch.
-pub const FORGE_COREMOD_SHA1: &str = "314ee07c956d50afc3ad44c01013144e16abceb1";
-pub const FORGE_COREMOD_SIZE: u64 = 103_819;
+pub const FORGE_COREMOD_SHA1: &str = "f48c31400e15114c4487b10b939b3794d0a41206";
+pub const FORGE_COREMOD_SIZE: u64 = 105_327;
 /// The reviewed typed Forge client mod staged by `prepareBootstrap`.
 pub const FORGE_CLIENT_MOD_SHA1: &str = "cf07b633d8911ffc827d3c755b735e638e871868";
 pub const FORGE_CLIENT_MOD_SIZE: u64 = 259_955;
@@ -164,9 +164,9 @@ mod tests {
         assert_eq!(lock.optifine.size, 2_585_014);
         assert_eq!(
             FORGE_COREMOD_SHA1,
-            "314ee07c956d50afc3ad44c01013144e16abceb1"
+            "f48c31400e15114c4487b10b939b3794d0a41206"
         );
-        assert_eq!(FORGE_COREMOD_SIZE, 103_819);
+        assert_eq!(FORGE_COREMOD_SIZE, 105_327);
         assert_eq!(
             FORGE_CLIENT_MOD_SHA1,
             "cf07b633d8911ffc827d3c755b735e638e871868"

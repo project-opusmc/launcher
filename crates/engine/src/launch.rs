@@ -84,6 +84,11 @@ pub struct LaunchOptions {
     pub height: Option<u32>,
     pub utility_settings_file: Option<PathBuf>,
     pub brand_wordmark_file: Option<PathBuf>,
+    /// Per-instance game window title. When set, the runtime window-title patch
+    /// renders this exact string so concurrent instances are distinguishable
+    /// (for example "Opus Client - [OFFICIAL] zvwgvx"). `None` keeps the shared
+    /// default "Opus Client".
+    pub window_title: Option<String>,
 }
 
 impl Default for LaunchOptions {
@@ -95,6 +100,7 @@ impl Default for LaunchOptions {
             height: None,
             utility_settings_file: None,
             brand_wordmark_file: None,
+            window_title: None,
         }
     }
 }
@@ -317,6 +323,12 @@ impl LaunchPlan {
                 brand_wordmark_file,
             ));
         }
+        if let Some(window_title) = &options.window_title {
+            let sanitized = sanitize_window_title(window_title);
+            if !sanitized.is_empty() {
+                jvm_arguments.push(OsString::from(format!("-Dopus.window.title={sanitized}")));
+            }
+        }
         if let (Some(logging), Some(path)) = (&minecraft.version.logging, &minecraft.logging_config)
         {
             let filtered_path = session_directory.join("log4j-opus.xml");
@@ -520,6 +532,28 @@ fn launch_mode_name(mode: &LaunchMode) -> &'static str {
         LaunchMode::Bootstrap { .. } => "bootstrap",
         LaunchMode::ForgeBootstrap { .. } => "forge-bootstrap",
     }
+}
+
+/// Normalize a per-instance window title into a single printable line before it
+/// reaches the JVM system property. The runtime patch also sanitizes, but the
+/// launcher enforces the same contract so a stray newline can never split the
+/// `-Dopus.window.title=` argument into an unintended JVM flag.
+fn sanitize_window_title(raw: &str) -> String {
+    raw.chars()
+        .map(|character| {
+            if character.is_control() {
+                ' '
+            } else {
+                character
+            }
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(120)
+        .collect()
 }
 
 fn platform_jvm_arguments(os: OperatingSystem) -> Vec<OsString> {
@@ -1839,6 +1873,20 @@ mod tests {
         );
         assert!(platform_jvm_arguments(OperatingSystem::Windows).is_empty());
         assert!(platform_jvm_arguments(OperatingSystem::Linux).is_empty());
+    }
+
+    #[test]
+    fn sanitizes_window_titles_to_a_single_printable_line() {
+        assert_eq!(
+            sanitize_window_title("Opus Client - [OFFICIAL] zvwgvx"),
+            "Opus Client - [OFFICIAL] zvwgvx"
+        );
+        assert_eq!(
+            sanitize_window_title("  Opus\nClient\t- A  "),
+            "Opus Client - A"
+        );
+        assert_eq!(sanitize_window_title("\n\t  "), "");
+        assert_eq!(sanitize_window_title(&"x".repeat(500)).chars().count(), 120);
     }
 
     #[test]

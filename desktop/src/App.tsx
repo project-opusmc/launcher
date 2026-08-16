@@ -55,6 +55,15 @@ type GameLaunchFinished = {
   simulated: boolean;
 };
 
+type RunningInstance = {
+  sessionId: string;
+  accountId: string;
+  username: string;
+  badge: string;
+  title: string;
+  logDirectory: string;
+};
+
 type UtilitySettings = {
   schemaVersion: number;
   utilities: Record<TuiUtilityId, TuiUtilityPreference>;
@@ -241,6 +250,7 @@ export default function App() {
   const [busy, setBusy] = useState<string | null>(null);
   const [loginCancelling, setLoginCancelling] = useState(false);
   const [runningSessions, setRunningSessions] = useState<Record<string, string>>({});
+  const [instances, setInstances] = useState<RunningInstance[]>([]);
   const [qaUsername, setQaUsername] = useState("");
   const [optifineSourcePath, setOptifineSourcePath] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
@@ -280,9 +290,26 @@ export default function App() {
     }
   }, []);
 
+  const refreshInstances = useCallback(async () => {
+    if (!isTauriRuntime()) return;
+    try {
+      const next = await invoke<RunningInstance[]>("list_instances");
+      setInstances(next);
+    } catch {
+      // A transient list failure should not surface as a launcher error.
+    }
+  }, []);
+
   useEffect(() => {
     void refresh();
-  }, [refresh]);
+    void refreshInstances();
+  }, [refresh, refreshInstances]);
+
+  useEffect(() => {
+    if (!isTauriRuntime()) return;
+    const timer = window.setInterval(() => void refreshInstances(), 2000);
+    return () => window.clearInterval(timer);
+  }, [refreshInstances]);
 
   useEffect(() => {
     if (!notice) return;
@@ -346,6 +373,7 @@ export default function App() {
       const detail = `${result.simulated ? "Developer test" : "Minecraft"}: ${result.message}${result.logDirectory ? ` Logs: ${result.logDirectory}` : ""}`;
       if (result.outcome === "failed") setError(detail);
       else setNotice(detail);
+      void refreshInstances();
     }).then((dispose) => {
       if (disposed) dispose();
       else unlisten = dispose;
@@ -452,9 +480,10 @@ export default function App() {
           : [...current.activeAccountIds, started.accountId],
       } : current);
       setNotice("Minecraft instance is starting. You can select another identity and launch it now.");
+      void refreshInstances();
       if (started.accountId !== accountId) void refresh();
     });
-  }, [refresh, run, settings]);
+  }, [refresh, refreshInstances, run, settings]);
 
   const saveSettings = useCallback(() => {
     void run("settings", async () => {
@@ -513,6 +542,17 @@ export default function App() {
     });
   }, [run]);
 
+  const onKillInstance = useCallback((sessionId: string) => {
+    void run("kill-instance", async () => {
+      if (!isTauriRuntime()) throw new Error("Instance control is available in the Tauri desktop build.");
+      await invoke("kill_instance", { sessionId });
+      setNotice("Sent stop signal to the instance.");
+      void refreshInstances();
+    });
+  }, [refreshInstances, run]);
+
+  const onBack = useCallback(() => setPage("home"), []);
+
   const onQuit = useCallback(() => {
     if (isTauriRuntime()) {
       void getCurrentWindow().close().catch((reason) => setError(String(reason)));
@@ -542,10 +582,13 @@ export default function App() {
       installProgress={installProgress}
       loginCancelling={loginCancelling}
       runningSessions={runningSessions}
+      instances={instances}
       qaUsername={qaUsername}
       optifineSourcePath={optifineSourcePath}
       onNavigate={setPage}
-      onRefresh={() => void refresh()}
+      onBack={onBack}
+      onKillInstance={onKillInstance}
+      onRefresh={() => { void refresh(); void refreshInstances(); }}
       onLaunch={launchMinecraft}
       onInstall={installMinecraft}
       onImportOptiFine={importOptiFine}
