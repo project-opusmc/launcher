@@ -7,8 +7,22 @@ bootstrap_destination="${opus_root}/desktop/src-tauri/resources/bootstrap"
 node "${opus_root}/scripts/stage-runtime-artifacts.mjs" \
   "${runtime_artifact_dir}" \
   "${bootstrap_destination}"
+# The launcher validates the Forge artifacts by SHA-1 and byte size at launch.
+# Verify that the staged Runtime bytes and those compile-time expectations are
+# the same before a desktop bundle can capture a mismatched pair.
+node "${opus_root}/scripts/verify-runtime-launch-contract.mjs" \
+  "${bootstrap_destination}"
 
-brand_destination="${opus_root}/desktop/src-tauri/resources/brand"
-mkdir -p "${brand_destination}"
-cp "${opus_root}/desktop/public/brand/opus-wordmark-transparent.png" \
-  "${brand_destination}/opus-wordmark-transparent.png"
+# The sole launcher shell must stay non-persistent so WebKit cannot register
+# with macOS Keychain despite file-only credential storage. Historical UI
+# preview source is deliberately not part of staging or verification.
+node -e '
+  const fs = require("fs");
+  const file = process.argv[1];
+  const config = JSON.parse(fs.readFileSync(file, "utf8"));
+  const window = config.app?.windows?.[0];
+  if (window?.incognito !== true) {
+    console.error(`Tauri window must be incognito to keep WebKit out of Keychain: ${file}`);
+    process.exit(1);
+  }
+' "${opus_root}/desktop/src-tauri/tauri.conf.json"

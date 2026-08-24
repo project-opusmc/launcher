@@ -6,13 +6,10 @@ pub const FORGE_PROFILE_ID: &str = "1.8.9-forge1.8.9-11.15.1.2318-1.8.9";
 pub const FORGE_MAIN_CLASS: &str = "net.minecraft.launchwrapper.Launch";
 pub const FORGE_OPTIFINE_FILE_NAME: &str = "OptiFine_1.8.9_HD_U_M5.jar";
 /// The reproducible Opus coremod artifact staged beside the desktop launcher.
-/// All launcher flavors use the same reviewed bytes so QA/Premium artifact
-/// drift cannot produce a build that installs successfully but cannot launch.
-pub const FORGE_COREMOD_SHA1: &str = "08946b9065f75f1c1538b2a256770354f29f6fda";
-pub const FORGE_COREMOD_SIZE: u64 = 119_201;
-/// The reviewed typed Forge client mod staged by `prepareBootstrap`.
-pub const FORGE_CLIENT_MOD_SHA1: &str = "c8fdea4a4bd8c91b1b71cd0906feade14e730755";
-pub const FORGE_CLIENT_MOD_SIZE: u64 = 611_127;
+/// The unified launcher always uses these reviewed bytes so artifact drift
+/// cannot produce a build that installs successfully but cannot launch.
+pub const FORGE_COREMOD_SHA1: &str = "ff7409bde9565d16638d8bcb0047ef43efdbc956";
+pub const FORGE_COREMOD_SIZE: u64 = 59_162;
 
 const FORGE_LOCK_JSON: &str = include_str!("../runtime-lock/forge-1.8.9-11.15.1.2318.lock.json");
 
@@ -164,13 +161,8 @@ mod tests {
         assert_eq!(lock.optifine.size, 2_585_014);
         assert_eq!(
             FORGE_COREMOD_SHA1,
-            "08946b9065f75f1c1538b2a256770354f29f6fda"
+            "ff7409bde9565d16638d8bcb0047ef43efdbc956"
         );
-        assert_eq!(FORGE_COREMOD_SIZE, 119_201);
-        assert_eq!(
-            FORGE_CLIENT_MOD_SHA1,
-            "c8fdea4a4bd8c91b1b71cd0906feade14e730755"
-        );
-        assert_eq!(FORGE_CLIENT_MOD_SIZE, 611_127);
+        assert_eq!(FORGE_COREMOD_SIZE, 59_162);
     }
 }

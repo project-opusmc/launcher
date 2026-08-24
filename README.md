@@ -34,8 +34,12 @@ runtime-manifest.json
 runtime-checksums.json
 artifacts/opus-bootstrap-<version>.jar
 artifacts/opus-runtime-legacy-1.8.9-<version>.jar
-artifacts/opus-client-legacy-1.8.9-<version>.jar
 ```
+
+The Core Mod JAR is the only OPUS mod staged beside locally imported OptiFine.
+No product client JAR, CEF/webview helper, or legacy UI artifact is part of the
+unified launcher runtime contract. Before Forge scans an isolated instance, the
+launcher removes a known stale `opus-client-legacy-1.8.9.jar`.
 
 Set `OPUS_RUNTIME_ARTIFACT_DIR` to a verified Runtime output directory before a
 desktop build. In the superproject this staging is handled by the root build
@@ -60,14 +64,11 @@ npm ci --prefix desktop
 ./scripts/check.sh
 ```
 
-Build the Premium or internal QA macOS bundle with:
+Build the one unified macOS bundle with:
 
 ```bash
 OPUS_RUNTIME_ARTIFACT_DIR=/path/to/runtime/build/runtime \
-  npm --prefix desktop run tauri:build:premium
-
-OPUS_RUNTIME_ARTIFACT_DIR=/path/to/runtime/build/runtime \
-  npm --prefix desktop run tauri:build:qa
+  npm --prefix desktop run tauri:build
 ```
 
 ## Accounts And Instances
@@ -80,13 +81,15 @@ same identity are rejected.
 
 Microsoft passwords and authorization codes never enter Launcher. Browser
 sign-in uses PKCE and a bounded localhost callback; refresh credentials are
-stored in the operating-system keychain.
+stored in Opus's private local credential vault, so routine tests do not invoke
+the macOS Keychain prompt.
 
-Default data roots are `~/.opus-launcher`, `~/.opus-launcher-qa`, and
-`~/.opus-launcher-ui-preview` on macOS/Linux, with corresponding
-`OpusLauncher*` directories below Local App Data on Windows. `OPUS_HOME`,
-`OPUS_QA_HOME`, and `OPUS_UI_PREVIEW_HOME` override their own isolated lanes.
-Launcher does not import, delete, or rewrite data belonging to earlier products.
+The sole data root is `~/.opus-launcher` on macOS/Linux, with
+`%LOCALAPPDATA%/OpusLauncher` on Windows. `OPUS_HOME` selects an isolated
+root when needed. On first use, the launcher imports a valid offline username
+from the retired QA data directory without deleting that historical file.
+Historical UI Preview source is quarantined and has no supported production
+launcher build or launch path.
 
 ## License
 

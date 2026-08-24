@@ -45,18 +45,15 @@ following a changed pointer.
 │   └── mods/
 │       ├── OptiFine_1.8.9_HD_U_M5.jar
 │       ├── opus-runtime-legacy-1.8.9.jar
-│       └── opus-client-legacy-1.8.9.jar
 ├── logs/<session-id>/         per-session diagnostics
 └── sessions/<session-id>/     natives, classpath file, filtered log4j
 ```
 
-Roots: `~/.opus-launcher` (macOS/Linux) or `%LOCALAPPDATA%/OpusLauncher`
-(Windows) for Premium; `~/.opus-launcher-qa` /
-`%LOCALAPPDATA%/OpusLauncherQA` for QA; and `~/.opus-launcher-ui-preview` /
-`%LOCALAPPDATA%/OpusLauncherUiPreview` for the
-temporary UI Preview. `OPUS_HOME` overrides Premium only; `OPUS_QA_HOME` and
-`OPUS_UI_PREVIEW_HOME` override their respective isolated roots and must be
-absolute.
+The unified root is `~/.opus-launcher` (macOS/Linux) or
+`%LOCALAPPDATA%/OpusLauncher` (Windows). `OPUS_HOME` overrides it. A valid
+offline username in the retired QA profile file is imported once into the
+unified account catalog; the historical file is otherwise not a runtime root.
+The former UI Preview source is quarantined and its runner is disabled.
 
 Every path built from remote metadata goes through `safe_join`, which rejects
 empty segments, `.`, `..`, absolute paths, leading separators, and Windows
@@ -123,8 +120,12 @@ OptiFine is not a network-install step. `import_optifine` accepts only a local
 file that matches the lock's exact size and SHA-1, copies it atomically into the
 shared local import cache, and never changes or removes the source file. At
 launch it is verified again and staged into the selected identity's isolated
-`instances/<uuid>/game/mods/` directory. The QA policy is documented in
-[qa-offline.md](qa-offline.md).
+`instances/<uuid>/game/mods/` directory. The verified OPUS Core Mod is staged
+there on every launch. The launcher removes the exact retired
+`opus-client-legacy-1.8.9.jar` before validating the two-artifact Forge set.
+Forge is never launched with the shared `game/mods` directory; an unmanaged
+file or directory in the isolated set fails closed. Offline-profile policy is
+documented in [qa-offline.md](qa-offline.md).
 
 `java_home` is `<runtime root>/jre.bundle/Contents/Home` on macOS, the runtime
 root itself elsewhere.
@@ -181,13 +182,12 @@ log directories created with mode `0700`; `diagnostics.jsonl` and `gc.log`
 pre-created at `0600` so a permissive umask cannot widen them; a payload-free
 `session-manifest.json` written up front.
 
-**JVM arguments.** macOS adds `-Xdock:name=Opus Client`. Then heap
+**JVM arguments.** macOS adds `-Xdock:name=Minecraft`. Then heap
 bounds, three native library path properties (`java.library.path`,
 `org.lwjgl.librarypath`, `net.java.games.input.librarypath`), the diagnostics
 file property, GC logging with details and date stamps, and an
-`-XX:ErrorFile=…/jvm_crash_%p.log`. Optional `-Dopus.utility.settings.file=` and
-`-Dopus.brand.wordmark.file=` connect the launcher's settings and branding to the
-in-game UI.
+`-XX:ErrorFile=…/jvm_crash_%p.log`. Production does not pass product-UI,
+browser-helper, HUD, or screen-replacement properties to Minecraft.
 
 **Logging config.** `prepare_logging_config` reads Mojang's verified Log4j XML
 and requires exactly one `<filters>` element **and** exactly one occurrence of
@@ -214,13 +214,13 @@ artifacts must be present. The launcher:
 - sends the ordinary game arguments through stdin; and
 - verifies the OPUS Runtime coremod checksum and required `FMLCorePlugin`
   manifest, then stages it as `game/mods/opus-runtime-legacy-1.8.9.jar`;
-- verifies and stages the typed Forge client mod into
-  `game/mods/opus-client-legacy-1.8.9.jar`; and
+- removes the exact retired `game/mods/opus-client-legacy-1.8.9.jar` before
+  Forge discovery; and
 - rejects an unexpected visible top-level entry in the managed `game/mods/`
   directory.
 
-The typed Forge client mod is the product UI route; Launcher treats both OPUS
-Runtime JARs as immutable artifacts and does not compile their source.
+The Core Mod is the sole OPUS Forge integration. Launcher treats the bootstrap
+and Core Mod as immutable artifacts and does not compile their source.
 
 The product desktop and CLI paths do not select `Direct` or standalone
 `Bootstrap` mode. Those internal variants exist only for test boundaries; they
@@ -245,14 +245,14 @@ the session directory, replacing any known access token with `<redacted>` line
 by line.
 
 `launch_game_via_macos_app` — the macOS path. It validates that
-`Opus Client.app/Contents/MacOS/Opus Client` exists, injects
+`Minecraft.app/Contents/MacOS/Minecraft` exists, injects
 `-Dopus.game.statusFile=…` *before* `-cp`, writes the stdin payload to a file,
 and runs:
 
 ```
 /usr/bin/open -n --stdin <payload> --stdout <raw> --stderr <raw>
               --env OPUS_GAME_WORKDIR=<game dir>
-              "Opus Client.app" --args <java> <jvm args> <main> <game args>
+              "Minecraft.app" --args <java> <jvm args> <main> <game args>
 ```
 
 LaunchServices cannot reliably wait for a stub that immediately replaces itself
@@ -261,6 +261,13 @@ instead. Because `open` does not stream, raw output files are redacted into the
 final `game.stdout.log` / `game.stderr.log` afterwards and the raw files (and
 the stdin payload) are deleted.
 
+The macOS stub supervises the Java child while it waits for a real on-screen
+window. It polls `waitpid(..., WNOHANG)` so a native JVM crash is recognized
+even while the child is a zombie; `kill(pid, 0)` alone is not sufficient. Window
+activation failures (including a locked console) are written to
+`game.window.failure` and are checked before the startup deadline, so the
+launcher fails immediately instead of waiting 60/90 seconds on a dead launch.
+
 Since `open`'s exit status only reports LaunchServices, the real outcome comes
 from the status file the Forge bootstrap writes:
 
@@ -268,7 +275,7 @@ from the status file the Forge bootstrap writes:
 | --- | --- |
 | `exited`, `terminated` | success (`game-lifecycle-complete`) |
 | `failed` | `MacosGameFailed` |
-| `starting`, `running`, empty | `MacosGameDidNotExit` |
+| `starting`, `running`, empty | polled until window/liveness checks pass or a typed crash/activation/timeout error is found |
 | anything else | `MacosGameStatusInvalid` |
 
 Every path calls `finalize_session`, which writes `launcher-summary.json` and
@@ -291,7 +298,7 @@ typed variant, and their messages are deliberately free of tokens and URLs.
   Forge profile metadata at runtime.
 - Changing OptiFine support? Keep it a local, user-provided import. OPUS must
   not add a download, bundled copy, or redistribution path.
-- Adding a managed mod? Extend the QA allowlist and directory validation for
+- Adding a managed mod? Extend the unified allowlist and directory validation for
   every Forge-discoverable location, lock its artifact and ordering, and add a
   clean-root smoke test.
 - Adding another network fetch? It must go through `Downloader` with a

@@ -9,7 +9,7 @@ use std::process::Command;
 
 fn main() {
     println!("cargo:rerun-if-changed=resources/macos-game-stub.c");
-    println!("cargo:rerun-if-changed=resources/Opus Client.app/Contents/Info.plist");
+    println!("cargo:rerun-if-changed=resources/Minecraft.app/Contents/Info.plist");
 
     #[cfg(target_os = "macos")]
     build_macos_game_stub();
@@ -23,8 +23,7 @@ fn build_macos_game_stub() {
         env::var("CARGO_MANIFEST_DIR").expect("Cargo must provide CARGO_MANIFEST_DIR"),
     );
     let source = manifest_directory.join("resources/macos-game-stub.c");
-    let executable =
-        manifest_directory.join("resources/Opus Client.app/Contents/MacOS/Opus Client");
+    let executable = manifest_directory.join("resources/Minecraft.app/Contents/MacOS/Minecraft");
 
     if !macos_game_stub_needs_rebuild(&source, &executable) {
         return;
@@ -54,6 +53,8 @@ fn build_macos_game_stub() {
             "--sdk",
             "macosx",
             "clang",
+            "-x",
+            "objective-c",
             "-std=c11",
             "-Wall",
             "-Wextra",
@@ -65,6 +66,7 @@ fn build_macos_game_stub() {
             "-mmacosx-version-min=11.0",
         ])
         .arg(&source)
+        .args(["-framework", "AppKit", "-framework", "CoreGraphics"])
         .arg("-o")
         .arg(&staged_executable)
         .status()

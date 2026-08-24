@@ -8,8 +8,8 @@ invariant genuinely needs to change, record the reasoning in a new ADR.
 
 1. **No unverified bytes reach the game.** Every managed artifact — version
    JSON, client JAR, Mojang and Forge libraries, natives, assets, Java runtime
-   files, Log4j config, OPUS coremod, and OPUS client mod — must match its declared size and
-   SHA-1 before use. All managed downloads go through `Downloader::ensure`;
+   files, Log4j config, and the OPUS Core Mod — must match its declared size
+   and SHA-1 before use. All managed downloads go through `Downloader::ensure`;
    there is no bypass path.
 2. **Downloads are atomic.** Bytes land in a sibling `.part-<pid>` file, are
    verified, then renamed. A failed verification deletes the partial file.
@@ -45,9 +45,12 @@ invariant genuinely needs to change, record the reasoning in a new ADR.
     refresh credential, authorization code, password, or client secret.
 12. **No token on a command line.** Authenticated game arguments cross into the
     Forge bridge through the length-prefixed stdin protocol. `ps` shows no token.
-13. **Only the refresh token is persisted, and only in the OS keychain.** Service
-    `org.polydevs.opusmc.launcher.microsoft.refresh-token`, keyed by Minecraft
-    profile UUID. No file-backed token cache.
+13. **Only the refresh token is persisted, and only in Opus's local vault.** It
+    is keyed by Minecraft profile UUID under the platform data directory (or
+    `OPUS_AUTH_DIR` for an isolated test), with a `0700` directory and `0600`
+    token files on Unix. The launcher never calls the OS keychain. The unified
+    Tauri window is `incognito`, so WebKit cannot create a persistent
+    website-data store and reintroduce a macOS Keychain prompt.
 14. **The authorization code is never echoed to the browser.** The three
     callback pages are static, `no-store`, `default-src 'none'`.
 15. **Callback validation is strict.** Loopback peers only, `GET` on exactly
@@ -61,8 +64,8 @@ invariant genuinely needs to change, record the reasoning in a new ADR.
     field is extracted; bodies are never interpolated into an error. The single
     exception is the exact `Invalid app registration` mapping.
 19. **Every supported product launch uses the Forge stdin bridge.** The desktop
-    and CLI do not select a direct or standalone bootstrap path; the retained
-    direct test branch also refuses authenticated identities defensively.
+    and CLI compile only the Forge bootstrap mode; no direct or standalone
+    bootstrap launch variant remains selectable.
 20. **One login at a time.** The `LoginAttempt` guard is owned by the blocking
     task, so a dropped IPC future cannot free the slot mid-flow.
 
@@ -87,33 +90,36 @@ invariant genuinely needs to change, record the reasoning in a new ADR.
 
 ## Build separation
 
-27. **QA, UI Preview, and Premium roots cannot overlap.** `discover_qa` rejects
-    a root that is lexically or canonically the Premium root. The UI Preview
-    root rejects both existing editions. `OPUS_HOME` does not affect QA or
-    Preview; `OPUS_QA_HOME` and `OPUS_UI_PREVIEW_HOME` must be absolute.
-28. **QA registers no Microsoft authentication surface.** It has the shared
-    offline account catalog but no `login_with_microsoft` or cancellation
-    command. QA offline profiles never access the keychain.
-29. **Non-default features cannot ship in release.** `compile_error!` blocks both
-    `qa-edition` and `developer-test-profile` in release builds; the developer
-    profile is additionally `debug_assertions`-gated at every use site.
+27. **There is one live launcher root.** `OPUS_HOME` selects the unified
+    storage root. The former QA root is migration input only and is never used
+    to launch, stage, or write a managed runtime.
+28. **One IPC surface owns both identity kinds.** Microsoft and offline
+    profiles live in one account catalog. Offline profiles never access the
+    credential vault; official profiles must have a file-owned refresh token.
+29. **Non-default developer features cannot ship in release.** `compile_error!`
+    blocks `developer-test-profile` in release builds; the developer profile is
+    additionally `debug_assertions`-gated at every use site. The quarantined
+    legacy-preview runner is disabled.
 30. **The developer test profile cannot touch the real system.**
     `require_runtime_mode()` blocks install, launch, login, and logout, and it
     cannot be disabled mid-session.
-31. **QA bypasses only the simulation guard.** It is a real runtime path. It
-    never bypasses an authentication guard — it has none to bypass.
+31. **Offline launch remains explicit.** A selected `[UNOFFICIAL]` identity
+    creates only a deterministic offline Minecraft session; it does not relax
+    the official-account refresh or entitlement path.
 
 ## Game side
 
-32. **Forge owns the game classloader.** The supported launch enters
+32. **Forge owns the game classloader.** The sole product launch enters
     LaunchWrapper and its `LaunchClassLoader`; OPUS transforms game classes only
-    through the verified Forge `IClassTransformer` adapter. The old standalone
-    `TransformingClassLoader` is not a product launch path.
-33. **The OPUS Forge artifacts are exact.** Before staging, the coremod checksum,
-    size, and `FMLCorePlugin` manifest attributes are verified; the normal
-    client mod checksum, size, `mcmod.info`, and expected class are verified.
-    Forge discovers both only from OPUS's isolated game directory, never from an
-    arbitrary launcher path.
+    through the verified Forge `IClassTransformer` adapter. The standalone
+    loader is excluded from production artifacts and cannot be selected by the
+    launcher.
+33. **The OPUS Forge artifacts are exact and instance-owned.** Before staging,
+    the Core Mod checksum, size, and `FMLCorePlugin` manifest attributes are
+    verified. Every launch atomically replaces same-named stale files in the
+    selected identity directory, and Forge discovers only locked OptiFine and
+    the Core Mod there, never from the shared game directory or an arbitrary
+    launcher path.
 34. **Transformers fail closed.** A patch asserts its anchor and throws when the
     count is unexpected — zero or multiple matches fail the class load rather
     than applying an uncertain patch.
@@ -125,8 +131,9 @@ invariant genuinely needs to change, record the reasoning in a new ADR.
 37. **Forge bootstrap arguments are exact.** The stdin-protocol marker is
     required; unknown or duplicated control arguments and trailing payload bytes
     throw. Forge's `FMLTweaker` is guaranteed before `Launch.main`.
-38. **UI hook failures degrade, they do not crash.** Reflection failures are
-    caught and reported once.
+38. **Vanilla owns UI and input.** The Core Mod artifact is rejected if it
+    contains a GUI hook, key binding/input class, CEF/webview symbol, or the
+    retired standalone loader.
 39. **Java 8 bytecode, no warnings.** `options.release = 8` with `-Werror` for
     every module.
 
@@ -134,19 +141,23 @@ invariant genuinely needs to change, record the reasoning in a new ADR.
 
 40. **The game launches through the compiled app stub.** A raw child `bin/java`
     is `BackgroundOnly` — it can render and play audio with no operable window.
-    The stub only `chdir`s and `execv`s, which preserves both the foreground app
-    identity and the stdin protocol.
+    The stub owns the LaunchServices foreground identity, forks the managed
+    Java child, activates its real window, and preserves the stdin protocol.
+    It must reap the child with `waitpid(..., WNOHANG)` while waiting so native
+    JVM crashes cannot become a false 60-second startup hang.
 41. **No `-XstartOnFirstThread` for 1.8.9.** It is a later-metadata trait and is
-    not valid on this launch path. No Carbon process transform, JNI, or AppKit
-    manipulation either.
+    not valid on this launch path. No Carbon process transform or JNI is used;
+    AppKit/CoreGraphics are limited to activating the stub-owned game window.
 42. **Rosetta is required and checked.** Verified with
     `/usr/bin/arch -x86_64 /usr/bin/true` before launch, with a clear failure
     message.
 43. **The macOS outcome comes from the status file, not `open`'s exit code.**
-    The foreground app stub immediately `exec`s Java, so OPUS must not use
-    `open -W`: LaunchServices can falsely report that its tracked process
-    disappeared. OPUS starts the app with `open -n` and waits for the bootstrap
-    status file to report `running`, then a terminal lifecycle state.
+    The foreground app stub supervises Java, so OPUS must not use `open -W`:
+    LaunchServices can falsely report that its tracked process disappeared.
+    OPUS starts the app with `open -n` and waits for the bootstrap
+    status file to report `running`, then a terminal lifecycle state. The
+    stub's `game.window.failure` marker and JVM crash markers are authoritative
+    early-failure signals and are checked before the startup timeout.
 44. **A CLI launch on macOS fails closed** and directs the caller to the
     packaged launcher.
 
@@ -157,14 +168,15 @@ invariant genuinely needs to change, record the reasoning in a new ADR.
 46. **The game directory is isolated from `.minecraft`.**
 47. **Memory bounds are validated twice** — on save and again before launch
     (512–16384 MiB).
-48. **QA and UI Preview managed Forge mod sets are allowlisted.** They consist
-    only of the exact imported OptiFine JAR, verified OPUS coremod, and verified
-    OPUS client mod. Unexpected top-level managed-mod entries fail launch; a
-    future mod requires a lock, validation coverage for every Forge-discoverable
-    directory, ordering review, and QA tests before it is supported.
-49. **Offline mode is not an access-control system.** A QA player can pick any
-    username; QA sessions require operator-controlled servers with a whitelist. The
-    QA bundle must never be published as a production artifact.
+48. **Managed Forge mod sets are allowlisted.** They consist only of the exact
+    imported OptiFine JAR and verified OPUS Core Mod. The known stale OPUS client
+    JAR is removed before validation; every other unexpected top-level
+    managed-mod entry fails launch. A future mod requires a lock, validation
+    coverage for every Forge-discoverable directory, ordering review, and
+    tests before it is supported.
+49. **Offline mode is not an access-control system.** An unofficial profile can
+    pick any username; those sessions require operator-controlled servers with a
+    whitelist.
 50. **The embedded Client ID must be Mojang-approved before authenticated
     launch works.** An application-owner release task; never borrow another
     launcher's identity.

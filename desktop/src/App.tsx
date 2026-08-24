@@ -14,7 +14,7 @@ import LauncherTui, {
   type TuiUtilityPreference,
 } from "./ui/LauncherTui";
 
-type BuildEdition = "premium" | "qaOffline";
+type BuildEdition = "unified";
 
 type DeveloperTestProfile = {
   available: boolean;
@@ -202,7 +202,8 @@ function previewSnapshot(): TuiSnapshot {
     javaStatus: "Java 8 preview state",
     accountStored: false,
     gameLaunchReady: true,
-    buildEdition: "premium",
+    gameLaunchStatus: "Packaged game launcher ready",
+    buildEdition: "unified",
     offlineProfile: { username: account.username, valid: true },
     accounts: [account],
     selectedAccountId: account.id,
@@ -260,7 +261,7 @@ export default function App() {
   const [skin, setSkin] = useState<AccountSkin | null>(null);
   const [skinLoading, setSkinLoading] = useState(false);
   const skinRequestRef = useRef(0);
-  const [qaUsername, setQaUsername] = useState("");
+  const [offlineUsername, setOfflineUsername] = useState("");
   const [optifineSourcePath, setOptifineSourcePath] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -528,16 +529,16 @@ export default function App() {
     });
   }, [run, settings]);
 
-  const saveQaProfile = useCallback(() => {
+  const saveOfflineProfile = useCallback(() => {
     void run("offline-profile", async () => {
       if (!isTauriRuntime()) throw new Error("Offline profile persistence is available in the Tauri desktop build.");
-      if (!minecraftUsernamePattern.test(qaUsername)) throw new Error("Use 3-16 letters, numbers, or underscores.");
-      const account = await invoke<TuiAccount>("save_offline_profile", { username: qaUsername });
+      if (!minecraftUsernamePattern.test(offlineUsername)) throw new Error("Use 3-16 letters, numbers, or underscores.");
+      const account = await invoke<TuiAccount>("save_offline_profile", { username: offlineUsername });
       setSnapshot((current) => current ? mergeAccount(current, account) : current);
-      setQaUsername("");
+      setOfflineUsername("");
       setNotice(`Unofficial profile ${account.username} was added to the launch list.`);
     });
-  }, [qaUsername, run]);
+  }, [offlineUsername, run]);
 
   const selectAccount = useCallback((accountId: string) => {
     if (snapshot?.selectedAccountId === accountId) return;
@@ -620,7 +621,7 @@ export default function App() {
       instances={instances}
       skin={skin}
       skinLoading={skinLoading}
-      qaUsername={qaUsername}
+      offlineUsername={offlineUsername}
       optifineSourcePath={optifineSourcePath}
       onNavigate={setPage}
       onBack={onBack}
@@ -632,7 +633,7 @@ export default function App() {
       onSaveSettings={saveSettings}
       onStartMicrosoftLogin={startMicrosoftLogin}
       onCancelMicrosoftLogin={cancelMicrosoftLogin}
-      onSaveQaProfile={saveQaProfile}
+      onSaveOfflineProfile={saveOfflineProfile}
       onSelectAccount={selectAccount}
       onRemoveAccount={removeAccount}
       onRunDeveloperSimulation={runDeveloperSimulation}
@@ -640,7 +641,7 @@ export default function App() {
       onClearError={() => setError(null)}
       onClearNotice={() => setNotice(null)}
       onSettingsChange={setSettings}
-      onQaUsernameChange={setQaUsername}
+      onOfflineUsernameChange={setOfflineUsername}
       onOptiFineSourcePathChange={setOptifineSourcePath}
       onUtilityPreferenceChange={onUtilityPreferenceChange}
     />

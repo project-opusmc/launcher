@@ -8,6 +8,7 @@
 /desktop/src-tauri/resources/bootstrap/*.jar
 /desktop/src-tauri/resources/bootstrap/runtime-*.json
 !/desktop/src-tauri/resources/bootstrap/.gitkeep
+/desktop/src-tauri/resources/opus-webview-helper.app/
 /runtime-artifacts/
 /.gradle/
 /logs/

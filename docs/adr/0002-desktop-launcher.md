@@ -21,7 +21,8 @@ account, settings, installation state and launch progress.
 - The desktop frontend uses narrowly scoped Tauri commands and status events;
   browser code never receives refresh tokens or Minecraft access tokens.
 - Non-secret settings live in OPUS's isolated data directory. Microsoft refresh
-  credentials remain solely in the operating-system keychain.
+  credentials remain solely in Opus's private local credential vault; the
+  launcher does not invoke the macOS Keychain.
 - The launcher ships with OPUS's first-party public Microsoft application Client
   ID. Choosing **Sign in with Microsoft** opens Microsoft's official
   account page in the system browser. Authorization Code + PKCE and a
@@ -31,11 +32,12 @@ account, settings, installation state and launch progress.
   prerequisite for the embedded public Client ID. It is owned by the OPUS
   publisher, never delegated to end users, and cannot be replaced with another
   launcher's identity.
-- On macOS, OPUS opens a small native universal `Opus Client.app` through
-  LaunchServices. Its only job is to set the game working directory and
-  `exec` the managed x86_64 Java 8 command. No Carbon process transform, JNI,
-  AppKit manipulation, or `-XstartOnFirstThread` is used. `exec` preserves the
-  Forge bootstrap stdin protocol while retaining the foreground app identity.
+- On macOS, OPUS opens a small native universal `Minecraft.app` through
+  LaunchServices. The stub sets the game working directory, starts the managed
+  x86_64 Java 8 child, activates its real game window, and forwards termination
+  signals while preserving the Forge bootstrap stdin protocol. It uses only
+  AppKit/CoreGraphics window activation; no Carbon process transform or JNI is
+  used, and `-XstartOnFirstThread` remains unsupported for 1.8.9.
 - On Windows and Linux, the desktop app uses the same launch-plan protocol
   without macOS-specific JVM options.
 

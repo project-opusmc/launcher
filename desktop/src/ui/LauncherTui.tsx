@@ -76,7 +76,8 @@ export type TuiSnapshot = {
   javaStatus: string;
   accountStored: boolean;
   gameLaunchReady: boolean;
-  buildEdition: "premium" | "qaOffline";
+  gameLaunchStatus: string;
+  buildEdition: "unified";
   offlineProfile: { username: string; valid: boolean } | null;
   accounts: TuiAccount[];
   selectedAccountId: string | null;
@@ -118,7 +119,7 @@ type LauncherTuiProps = {
   instances: readonly TuiInstance[];
   skin: TuiAccountSkin | null;
   skinLoading: boolean;
-  qaUsername: string;
+  offlineUsername: string;
   optifineSourcePath: string;
   onNavigate: (page: TuiPage) => void;
   onBack: () => void;
@@ -130,7 +131,7 @@ type LauncherTuiProps = {
   onSaveSettings: () => void;
   onStartMicrosoftLogin: () => void;
   onCancelMicrosoftLogin: () => void;
-  onSaveQaProfile: () => void;
+  onSaveOfflineProfile: () => void;
   onSelectAccount: (accountId: string) => void;
   onRemoveAccount: (accountId: string) => void;
   onRunDeveloperSimulation: () => void;
@@ -138,7 +139,7 @@ type LauncherTuiProps = {
   onClearError: () => void;
   onClearNotice: () => void;
   onSettingsChange: (settings: TuiSettings) => void;
-  onQaUsernameChange: (value: string) => void;
+  onOfflineUsernameChange: (value: string) => void;
   onOptiFineSourcePathChange: (value: string) => void;
   onUtilityPreferenceChange: (id: TuiUtilityId, update: Partial<TuiUtilityPreference>) => void;
 };
@@ -163,10 +164,9 @@ export default function LauncherTui(props: LauncherTuiProps) {
 
   const snapshotPending = props.snapshot === null && props.error === null;
   const snapshotUnavailable = props.snapshot === null && props.error !== null;
-  const isQaOfflineEdition = props.snapshot?.buildEdition === "qaOffline";
   const developerProfile = props.snapshot?.developerTestProfile;
-  const developerTestProfileActive = !isQaOfflineEdition && (developerProfile?.active ?? false);
-  const developerSimulationActive = !isQaOfflineEdition && (developerProfile?.simulationActive ?? false);
+  const developerTestProfileActive = developerProfile?.active ?? false;
+  const developerSimulationActive = developerProfile?.simulationActive ?? false;
   const installed = Boolean(props.snapshot?.minecraftReady) && !developerTestProfileActive;
   const gameLaunchReady = Boolean(props.snapshot?.gameLaunchReady) && !developerTestProfileActive;
   const optifineReady = Boolean(props.snapshot?.optifineReady) && !developerTestProfileActive;
@@ -190,7 +190,7 @@ export default function LauncherTui(props: LauncherTuiProps) {
   const selectedUtility = props.utilities.find((utility) => utility.id === selectedUtilityId) ?? props.utilities[0];
   const selectedUtilityPreference = selectedUtility ? props.utilityPreferences[selectedUtility.id] : undefined;
   const accountLabel = selectedAccount?.username ?? "NO IDENTITY";
-  const editionLabel = isQaOfflineEdition ? "QA BUILD" : "UNIFIED CLIENT";
+  const editionLabel = "UNIFIED CLIENT";
   const buildLabel = import.meta.env.DEV ? "v0.0.1-dev" : "v0.0.1";
 
   const runtimeState = snapshotPending
@@ -549,7 +549,6 @@ export default function LauncherTui(props: LauncherTuiProps) {
 
         {normalizedPage === "account" ? (
           <AccountScreen
-            isQaOfflineEdition={isQaOfflineEdition}
             snapshotPending={snapshotPending}
             snapshotUnavailable={snapshotUnavailable}
             accounts={accounts}
@@ -557,13 +556,13 @@ export default function LauncherTui(props: LauncherTuiProps) {
             activeAccountIds={activeAccountIds}
             skin={props.skin}
             skinLoading={props.skinLoading}
-            qaUsername={props.qaUsername}
+            offlineUsername={props.offlineUsername}
             busy={props.busy}
             loginCancelling={props.loginCancelling}
             developerTestProfileActive={developerTestProfileActive}
             developerSimulationActive={developerSimulationActive}
-            onQaUsernameChange={props.onQaUsernameChange}
-            onSaveQaProfile={props.onSaveQaProfile}
+            onOfflineUsernameChange={props.onOfflineUsernameChange}
+            onSaveOfflineProfile={props.onSaveOfflineProfile}
             onStartMicrosoftLogin={props.onStartMicrosoftLogin}
             onCancelMicrosoftLogin={props.onCancelMicrosoftLogin}
             onSelectAccount={props.onSelectAccount}
@@ -621,6 +620,7 @@ export default function LauncherTui(props: LauncherTuiProps) {
         developerSimulationActive={developerSimulationActive}
         onLaunch={activateLaunch}
         onOpenAccounts={() => props.onNavigate("account")}
+        onOpenSetup={() => props.onNavigate(profileReady ? "installation" : "account")}
       />
 
       <CommandBar commands={normalizedPage === "home"
@@ -668,7 +668,7 @@ function InstallationScreen(props: {
     { label: "Minecraft", value: props.installed ? "READY / 1.8.9" : "MISSING", tone: props.installed ? "success" : "warning" },
     { label: "Forge", value: props.installed ? "READY / 11.15.1.2318" : "MISSING", tone: props.installed ? "success" : "warning" },
     { label: "OptiFine", value: props.optifineReady ? "READY / HD U M5" : "MISSING", tone: props.optifineReady ? "success" : "warning" },
-    { label: "Opus Client", value: props.snapshot?.gameLaunchReady ? "READY" : "MISSING", tone: props.snapshot?.gameLaunchReady ? "success" : "warning" },
+    { label: "Minecraft host", value: props.snapshot?.gameLaunchReady ? "READY" : "MISSING", tone: props.snapshot?.gameLaunchReady ? "success" : "warning" },
     { label: "Java", value: props.installed ? "READY / 8" : "MISSING", tone: props.installed ? "success" : "warning" },
   ];
   return (
@@ -679,6 +679,7 @@ function InstallationScreen(props: {
       <Pane title="COMPONENTS">
         <KeyValueList rows={rows} />
         <div className="tui-detail-copy">
+          <p>{props.snapshot?.gameLaunchStatus ?? "Game launcher status unavailable."}</p>
           <p>{props.snapshot?.minecraftStatus ?? "The local installation has not been checked."}</p>
           <p>{props.snapshot?.optifineStatus ?? "OptiFine status unavailable."}</p>
           <p>{props.snapshot?.javaStatus ?? "Java runtime status unavailable."}</p>
@@ -972,7 +973,6 @@ function SkinViewer(props: { skin: TuiAccountSkin | null; loading: boolean; user
 }
 
 function AccountScreen(props: {
-  isQaOfflineEdition: boolean;
   snapshotPending: boolean;
   snapshotUnavailable: boolean;
   accounts: readonly TuiAccount[];
@@ -980,13 +980,13 @@ function AccountScreen(props: {
   activeAccountIds: ReadonlySet<string>;
   skin: TuiAccountSkin | null;
   skinLoading: boolean;
-  qaUsername: string;
+  offlineUsername: string;
   busy: string | null;
   loginCancelling: boolean;
   developerTestProfileActive: boolean;
   developerSimulationActive: boolean;
-  onQaUsernameChange: (value: string) => void;
-  onSaveQaProfile: () => void;
+  onOfflineUsernameChange: (value: string) => void;
+  onSaveOfflineProfile: () => void;
   onStartMicrosoftLogin: () => void;
   onCancelMicrosoftLogin: () => void;
   onSelectAccount: (accountId: string) => void;
@@ -997,7 +997,7 @@ function AccountScreen(props: {
   const [pendingRemoveId, setPendingRemoveId] = useState<string | null>(null);
   const [addOpen, setAddOpen] = useState(false);
   const [addMode, setAddMode] = useState<"choose" | "unofficial">("choose");
-  const qaUsernameValid = /^[A-Za-z0-9_]{3,16}$/.test(props.qaUsername);
+  const offlineUsernameValid = /^[A-Za-z0-9_]{3,16}$/.test(props.offlineUsername);
   const selectedAccount = props.accounts.find((account) => account.id === props.selectedAccountId) ?? null;
   const selectedRunning = selectedAccount ? props.activeAccountIds.has(selectedAccount.id) : false;
   useEffect(() => setPendingRemoveId(null), [props.selectedAccountId]);
@@ -1008,14 +1008,22 @@ function AccountScreen(props: {
   }, []);
 
   useEffect(() => {
-    if (props.busy === "offline-profile" && props.qaUsername === "") closeAdd();
-  }, [closeAdd, props.busy, props.qaUsername]);
+    if (props.busy === "offline-profile" && props.offlineUsername === "") closeAdd();
+  }, [closeAdd, props.busy, props.offlineUsername]);
 
   const accountRows: readonly KeyValueRow[] = [
     { label: "Identity", value: selectedAccount?.username ?? "NONE", tone: selectedAccount?.ready ? "success" : "warning" },
     { label: "Prefix", value: selectedAccount ? `[${selectedAccount.badge.toUpperCase()}]` : "NONE", tone: selectedAccount ? "warning" : "muted" },
     { label: "Provider", value: selectedAccount?.kind === "microsoft" ? "MICROSOFT" : selectedAccount ? "OFFLINE" : "NONE" },
-    { label: "Credential", value: selectedAccount?.ready ? "READY" : "UNAVAILABLE", tone: selectedAccount?.ready ? "success" : "warning" },
+    {
+      label: "Credential",
+      value: selectedAccount?.ready
+        ? "READY"
+        : selectedAccount?.kind === "microsoft"
+          ? "RECONNECT REQUIRED"
+          : "UNAVAILABLE",
+      tone: selectedAccount?.ready ? "success" : "warning",
+    },
     { label: "Instance", value: selectedRunning ? "RUNNING" : "IDLE", tone: selectedRunning ? "warning" : "muted" },
     { label: "UUID", value: selectedAccount?.uuid ? compactUuid(selectedAccount.uuid) : "MIGRATES ON LAUNCH", tone: "muted" },
   ];
@@ -1081,6 +1089,17 @@ function AccountScreen(props: {
                   {selectedRunning ? "INSTANCE IS RUNNING" : pendingRemoveId === selectedAccount.id ? "CONFIRM REMOVE" : "REMOVE SELECTED"}
                 </button>
               ) : <p className="tui-empty-state">SELECT AN IDENTITY</p>}
+              {selectedAccount?.kind === "microsoft" && !selectedAccount.ready ? (
+                <button
+                  type="button"
+                  className="tui-action-button is-primary"
+                  data-tui-nav-item
+                  disabled={props.busy !== null}
+                  onClick={props.onStartMicrosoftLogin}
+                >
+                  RECONNECT OFFICIAL
+                </button>
+              ) : null}
               {props.busy === "login" ? (
                 <button type="button" className="tui-action-button" disabled={props.loginCancelling} onClick={props.onCancelMicrosoftLogin}>
                   {props.loginCancelling ? "CANCELLING..." : "CANCEL SIGN-IN"}
@@ -1128,24 +1147,24 @@ function AccountScreen(props: {
               </div>
             ) : (
               <div className="tui-form-stack">
-                <label htmlFor="tui-qa-username">Unofficial username</label>
+                <label htmlFor="tui-offline-username">Unofficial username</label>
                 <input
-                  id="tui-qa-username"
+                  id="tui-offline-username"
                   type="text"
-                  value={props.qaUsername}
+                  value={props.offlineUsername}
                   minLength={3}
                   maxLength={16}
                   spellCheck={false}
                   autoFocus
                   placeholder="Minecraft username"
-                  onChange={(event) => props.onQaUsernameChange(event.target.value)}
+                  onChange={(event) => props.onOfflineUsernameChange(event.target.value)}
                   disabled={props.busy !== null}
-                  onKeyDown={(event) => { if (event.key === "Enter" && qaUsernameValid) props.onSaveQaProfile(); }}
+                  onKeyDown={(event) => { if (event.key === "Enter" && offlineUsernameValid) props.onSaveOfflineProfile(); }}
                 />
-                <p className={qaUsernameValid ? "tui-help is-valid" : "tui-help"}>3-16 letters, numbers, or underscores.</p>
+                <p className={offlineUsernameValid ? "tui-help is-valid" : "tui-help"}>3-16 letters, numbers, or underscores.</p>
                 <div className="tui-modal-buttons">
                   <button type="button" className="tui-action-button" onClick={() => setAddMode("choose")} disabled={props.busy !== null}>BACK</button>
-                  <button type="button" className="tui-action-button is-primary" disabled={!qaUsernameValid || props.busy !== null} onClick={props.onSaveQaProfile}>
+                  <button type="button" className="tui-action-button is-primary" disabled={!offlineUsernameValid || props.busy !== null} onClick={props.onSaveOfflineProfile}>
                     ADD UNOFFICIAL PROFILE
                   </button>
                 </div>
@@ -1388,6 +1407,7 @@ function LaunchDock(props: {
   developerSimulationActive: boolean;
   onLaunch: () => void;
   onOpenAccounts: () => void;
+  onOpenSetup: () => void;
 }) {
   const launchLabel = props.developerTestProfileActive
     ? props.developerSimulationActive ? "SIMULATION RUNNING" : "RUN SIMULATION"
@@ -1409,7 +1429,7 @@ function LaunchDock(props: {
         type="button"
         className="tui-launch-button"
         disabled={props.busy !== null || props.accountRunning || props.developerSimulationActive}
-        onClick={props.onLaunch}
+        onClick={props.developerTestProfileActive || props.ready ? props.onLaunch : props.onOpenSetup}
       >
         <span aria-hidden="true">&gt;</span>
         {launchLabel}

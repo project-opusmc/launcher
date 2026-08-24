@@ -9,12 +9,8 @@
     "check": "tsc --noEmit",
     "desktop:dev": "bash ../scripts/start-desktop-dev.sh",
     "desktop:build": "bash ../scripts/build-desktop-release.sh",
-    "tauri:dev:qa": "tauri dev --features qa-edition --config src-tauri/tauri.qa.conf.json",
-    "tauri:build:premium": "tauri build --bundles app",
-    "tauri:build:qa": "tauri build --debug --bundles app --runner ../../scripts/tauri-cargo-qa.sh --config src-tauri/tauri.qa.conf.json",
-    "tauri:build:ui-preview": "tauri build --debug --bundles app --runner ../../scripts/tauri-cargo-ui-preview.sh --config src-tauri/tauri.ui-preview.conf.json",
-    "tauri:install:premium": "bash ../scripts/install-opus-launcher.sh",
-    "tauri:install:qa": "bash ../scripts/install-opus-qa.sh",
+    "tauri:build": "bash ../scripts/build-tauri-bundle.sh",
+    "tauri:install": "bash ../scripts/install-opus-launcher.sh",
     "tauri": "tauri"
   },
   "dependencies": {

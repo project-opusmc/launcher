@@ -1,4 +1,3 @@
-#[cfg(not(feature = "qa-edition"))]
 use opus_auth::{BrowserLoginCancellation, MicrosoftAuthenticator, RefreshTokenStore};
 use opus_engine::{
     GameIdentity, InstallProgress, Installer, LaunchMode, LaunchOptions, LaunchPlan,
@@ -10,29 +9,18 @@ use std::collections::BTreeMap;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-#[cfg(not(feature = "qa-edition"))]
+use std::process::Command;
 use std::sync::MutexGuard;
 use std::sync::{Arc, Mutex};
 use tauri::Manager;
 use tauri::{AppHandle, Emitter};
 
-#[cfg(all(
-    not(debug_assertions),
-    any(feature = "developer-test-profile", feature = "qa-edition")
-))]
-compile_error!("developer-test-profile and qa-edition are only allowed in debug builds");
+#[cfg(all(not(debug_assertions), feature = "developer-test-profile"))]
+compile_error!("developer-test-profile is only allowed in debug builds");
 
-#[cfg(all(
-    debug_assertions,
-    feature = "developer-test-profile",
-    not(feature = "qa-edition")
-))]
+#[cfg(all(debug_assertions, feature = "developer-test-profile"))]
 mod developer_test;
-#[cfg(all(
-    debug_assertions,
-    feature = "developer-test-profile",
-    not(feature = "qa-edition")
-))]
+#[cfg(all(debug_assertions, feature = "developer-test-profile"))]
 use developer_test::DeveloperTestCoordinator;
 mod accounts;
 use accounts::{AccountKind, AccountSummary, ResolvedAccount};
@@ -43,24 +31,23 @@ const SETTINGS_FILE: &str = "launcher-settings-v1.json";
 /// can migrate independently without risking launch settings.
 const UTILITY_SETTINGS_FILE: &str = "utility-settings-v1.json";
 const UTILITY_SETTINGS_SCHEMA_VERSION: u8 = 1;
-#[cfg(feature = "qa-edition")]
-const QA_PROFILE_FILE: &str = "offline-profile-v1.json";
+const LEGACY_QA_PROFILE_FILE: &str = "offline-profile-v1.json";
+const LEGACY_QA_MIGRATION_FILE: &str = ".legacy-qa-offline-profile-v1.migrated";
 /// Public identifier of Opus's Microsoft Entra application. Desktop clients are
 /// public OAuth clients, so this identifier is safe to distribute; refresh
-/// credentials remain in the operating-system keychain.
-#[cfg(not(feature = "qa-edition"))]
+/// credentials remain in Opus's private local vault.
 const OPUS_MICROSOFT_CLIENT_ID: &str = "352b876e-6d3b-4cb8-9095-82957a752784";
+/// A stale nested game stub can launch Java without owning or activating its
+/// window. Keep the launcher from offering a launch button until the bundled
+/// stub contains the fail-fast contract shipped by the current build.
+const MACOS_GAME_STUB_CONTRACT_MARKER: &[u8] =
+    b"macOS console is locked; unlock before launching Minecraft";
 
 #[derive(Default)]
 struct AppState {
     game_launch: Arc<GameLaunchCoordinator>,
-    #[cfg(not(feature = "qa-edition"))]
     login: Arc<LoginCoordinator>,
-    #[cfg(all(
-        debug_assertions,
-        feature = "developer-test-profile",
-        not(feature = "qa-edition")
-    ))]
+    #[cfg(all(debug_assertions, feature = "developer-test-profile"))]
     developer_test: Arc<DeveloperTestCoordinator>,
 }
 
@@ -199,33 +186,28 @@ impl Drop for GameLaunchAttempt {
     }
 }
 
-#[cfg(not(feature = "qa-edition"))]
 #[derive(Default)]
 struct LoginCoordinator {
     state: Mutex<LoginCoordinatorState>,
 }
 
-#[cfg(not(feature = "qa-edition"))]
 #[derive(Default)]
 struct LoginCoordinatorState {
     next_id: u64,
     active: Option<ActiveLogin>,
 }
 
-#[cfg(not(feature = "qa-edition"))]
 struct ActiveLogin {
     id: u64,
     cancellation: BrowserLoginCancellation,
 }
 
-#[cfg(not(feature = "qa-edition"))]
 struct LoginAttempt {
     coordinator: Arc<LoginCoordinator>,
     id: u64,
     cancellation: BrowserLoginCancellation,
 }
 
-#[cfg(not(feature = "qa-edition"))]
 impl LoginCoordinator {
     fn lock_state(&self) -> MutexGuard<'_, LoginCoordinatorState> {
         self.state
@@ -233,24 +215,18 @@ impl LoginCoordinator {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    #[cfg(all(
-        debug_assertions,
-        feature = "developer-test-profile",
-        not(feature = "qa-edition")
-    ))]
+    #[cfg(all(debug_assertions, feature = "developer-test-profile"))]
     fn is_active(&self) -> bool {
         self.lock_state().active.is_some()
     }
 }
 
-#[cfg(not(feature = "qa-edition"))]
 impl LoginAttempt {
     fn cancellation(&self) -> &BrowserLoginCancellation {
         &self.cancellation
     }
 }
 
-#[cfg(not(feature = "qa-edition"))]
 impl Drop for LoginAttempt {
     fn drop(&mut self) {
         let mut state = self.coordinator.lock_state();
@@ -278,33 +254,19 @@ impl AppState {
     }
 
     fn developer_test_profile(&self) -> DeveloperTestProfile {
-        #[cfg(all(
-            debug_assertions,
-            feature = "developer-test-profile",
-            not(feature = "qa-edition")
-        ))]
+        #[cfg(all(debug_assertions, feature = "developer-test-profile"))]
         {
             self.developer_test.profile()
         }
-        #[cfg(not(all(
-            debug_assertions,
-            feature = "developer-test-profile",
-            not(feature = "qa-edition")
-        )))]
+        #[cfg(not(all(debug_assertions, feature = "developer-test-profile")))]
         {
             DeveloperTestProfile::unavailable()
         }
     }
 
     /// A developer simulation must never start an installer or game process.
-    /// The QA offline edition is a real runtime path and therefore bypasses
-    /// only this *developer simulation* guard, never an authentication guard.
     fn require_runtime_mode(&self) -> Result<(), String> {
-        #[cfg(all(
-            debug_assertions,
-            feature = "developer-test-profile",
-            not(feature = "qa-edition")
-        ))]
+        #[cfg(all(debug_assertions, feature = "developer-test-profile"))]
         {
             if self.developer_test.profile().active {
                 Err("This action is unavailable while Developer Test Profile is active".to_owned())
@@ -312,17 +274,12 @@ impl AppState {
                 Ok(())
             }
         }
-        #[cfg(not(all(
-            debug_assertions,
-            feature = "developer-test-profile",
-            not(feature = "qa-edition")
-        )))]
+        #[cfg(not(all(debug_assertions, feature = "developer-test-profile")))]
         {
             Ok(())
         }
     }
 
-    #[cfg(not(feature = "qa-edition"))]
     fn begin_login(&self) -> Result<LoginAttempt, String> {
         let mut state = self.login.lock_state();
         if state.active.is_some() {
@@ -342,7 +299,6 @@ impl AppState {
         })
     }
 
-    #[cfg(not(feature = "qa-edition"))]
     fn cancel_login(&self) -> bool {
         let state = self.login.lock_state();
         let Some(active) = state.active.as_ref() else {
@@ -371,6 +327,7 @@ struct LauncherSnapshot {
     active_launches: usize,
     active_account_ids: Vec<String>,
     game_launch_ready: bool,
+    game_launch_status: String,
     developer_test_profile: DeveloperTestProfile,
 }
 
@@ -388,29 +345,15 @@ struct DeveloperTestProfile {
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 enum BuildEdition {
-    #[cfg(not(feature = "qa-edition"))]
-    Premium,
-    #[cfg(feature = "qa-edition")]
-    QaOffline,
+    Unified,
 }
 
 fn build_edition() -> BuildEdition {
-    #[cfg(feature = "qa-edition")]
-    {
-        BuildEdition::QaOffline
-    }
-    #[cfg(not(feature = "qa-edition"))]
-    {
-        BuildEdition::Premium
-    }
+    BuildEdition::Unified
 }
 
 impl DeveloperTestProfile {
-    #[cfg(not(all(
-        debug_assertions,
-        feature = "developer-test-profile",
-        not(feature = "qa-edition")
-    )))]
+    #[cfg(not(all(debug_assertions, feature = "developer-test-profile")))]
     fn unavailable() -> Self {
         Self {
             available: false,
@@ -533,15 +476,6 @@ impl Default for UtilitySettings {
     }
 }
 
-/// The only identity material persisted by the QA launcher. It has no token,
-/// UUID, entitlement, or Microsoft account data; the runtime derives the
-/// standard deterministic Minecraft offline UUID at launch time.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-struct QaProfile {
-    username: String,
-}
-
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 struct OfflineProfileSnapshot {
@@ -549,22 +483,19 @@ struct OfflineProfileSnapshot {
     valid: bool,
 }
 
-impl From<QaProfile> for OfflineProfileSnapshot {
-    fn from(profile: QaProfile) -> Self {
-        let valid = GameIdentity::offline(&profile.username).is_ok();
-        Self {
-            username: profile.username,
-            valid,
-        }
-    }
-}
-
-#[cfg(not(feature = "qa-edition"))]
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct AccountResult {
     profile: String,
     account: AccountSummary,
+}
+
+/// Shape of the old QA-only profile file. It is read solely to move a saved
+/// offline username into the unified account catalog.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LegacyQaProfile {
+    username: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -636,13 +567,12 @@ struct PreparedGameLaunch {
     account_id: String,
     username: String,
     badge: String,
-    window_title: String,
+    instance_label: String,
 }
 
 struct ForgeBootstrapArtifacts {
     bootstrap_jar: PathBuf,
     coremod_jar: PathBuf,
-    client_mod_jar: PathBuf,
 }
 
 #[tauri::command]
@@ -670,7 +600,8 @@ async fn launcher_snapshot(
 
 /// Selects an entirely synthetic snapshot before touching any real launcher
 /// service. Keeping this boundary small makes it auditable that a developer
-/// simulation cannot read the keychain, inspect game files, or probe a runner.
+/// simulation cannot read the local credential vault, inspect game files, or
+/// probe a runner.
 fn developer_test_snapshot(developer_test_profile: DeveloperTestProfile) -> LauncherSnapshot {
     LauncherSnapshot {
         build_edition: build_edition(),
@@ -688,6 +619,7 @@ fn developer_test_snapshot(developer_test_profile: DeveloperTestProfile) -> Laun
         active_launches: 0,
         active_account_ids: Vec::new(),
         game_launch_ready: false,
+        game_launch_status: "Simulation only (no game launcher used)".to_owned(),
         developer_test_profile,
     }
 }
@@ -753,9 +685,11 @@ fn snapshot_blocking(
             username: account.username.clone(),
             valid: account.ready,
         });
-    let game_launch_ready = match platform.os {
-        OperatingSystem::MacOs => macos_game_app_path(app).is_ok(),
-        OperatingSystem::Windows | OperatingSystem::Linux => true,
+    let (game_launch_ready, game_launch_status) = match platform.os {
+        OperatingSystem::MacOs => macos_game_launch_readiness(app),
+        OperatingSystem::Windows | OperatingSystem::Linux => {
+            (true, "Packaged game launcher ready".to_owned())
+        }
     };
 
     Ok(LauncherSnapshot {
@@ -774,6 +708,7 @@ fn snapshot_blocking(
         active_launches,
         active_account_ids,
         game_launch_ready,
+        game_launch_status,
         developer_test_profile,
     })
 }
@@ -927,23 +862,6 @@ async fn account_skin(uuid: String) -> Result<AccountSkin, String> {
     })
 }
 
-/// Read the QA-only offline profile. Premium builds do not register this
-/// command, so the browser frontend can never create an unauthenticated
-/// Premium launch identity.
-#[cfg(feature = "qa-edition")]
-#[tauri::command]
-fn get_qa_profile() -> Result<QaProfile, String> {
-    Ok(load_qa_profile()?.unwrap_or_default())
-}
-
-#[cfg(feature = "qa-edition")]
-#[tauri::command]
-fn save_qa_profile(profile: QaProfile) -> Result<(), String> {
-    validate_qa_profile(&profile)?;
-    write_json_atomic(&qa_profile_path()?, &profile)
-}
-
-#[cfg(not(feature = "qa-edition"))]
 #[tauri::command]
 async fn login_with_microsoft(
     state: tauri::State<'_, AppState>,
@@ -971,7 +889,6 @@ async fn login_with_microsoft(
     result
 }
 
-#[cfg(not(feature = "qa-edition"))]
 fn complete_microsoft_login(
     cancellation: &BrowserLoginCancellation,
 ) -> Result<AccountResult, String> {
@@ -1003,7 +920,6 @@ fn complete_microsoft_login(
     })
 }
 
-#[cfg(not(feature = "qa-edition"))]
 #[tauri::command]
 fn cancel_microsoft_login(state: tauri::State<'_, AppState>) -> bool {
     state.cancel_login()
@@ -1050,7 +966,7 @@ async fn launch_game(
         account_id: account_id.clone(),
         username: username.clone(),
         badge: prepared.badge.clone(),
-        title: prepared.window_title.clone(),
+        title: prepared.instance_label.clone(),
         log_directory: prepared.plan.log_directory.display().to_string(),
     });
     let coordinator_for_wait = Arc::clone(&state.game_launch);
@@ -1158,11 +1074,7 @@ fn terminate_instance_process(log_directory: &Path) -> Result<(), String> {
 
 /// Opt into an in-memory developer profile for local UI work. This command is
 /// not compiled or registered outside a debug build with the explicit feature.
-#[cfg(all(
-    debug_assertions,
-    feature = "developer-test-profile",
-    not(feature = "qa-edition")
-))]
+#[cfg(all(debug_assertions, feature = "developer-test-profile"))]
 #[tauri::command]
 fn set_developer_test_profile(
     state: tauri::State<'_, AppState>,
@@ -1177,12 +1089,9 @@ fn set_developer_test_profile(
 }
 
 /// Simulates the normal start/finish event lifecycle without calling the
-/// installer, authentication services, keychain, Java, or the native runner.
-#[cfg(all(
-    debug_assertions,
-    feature = "developer-test-profile",
-    not(feature = "qa-edition")
-))]
+/// installer, authentication services, local credential vault, Java, or the
+/// native runner.
+#[cfg(all(debug_assertions, feature = "developer-test-profile"))]
 #[tauri::command]
 fn simulate_developer_game(
     state: tauri::State<'_, AppState>,
@@ -1228,20 +1137,18 @@ fn utility_settings_path() -> Result<PathBuf, String> {
     Ok(paths.root.join(UTILITY_SETTINGS_FILE))
 }
 
-/// Resolve storage for the active launcher flavor. The QA flavor never uses
-/// `OpusPaths::discover`, which is the Premium root and honors `OPUS_HOME`.
+/// Resolve the storage for the sole production launcher. A one-time migration
+/// imports the retired QA package's offline profile into this account catalog.
 fn launcher_paths() -> Result<OpusPaths, String> {
     #[cfg(feature = "ui-preview")]
     {
-        OpusPaths::discover_ui_preview().map_err(display_error)
+        return OpusPaths::discover_ui_preview().map_err(display_error);
     }
-    #[cfg(all(feature = "qa-edition", not(feature = "ui-preview")))]
+    #[cfg(not(feature = "ui-preview"))]
     {
-        OpusPaths::discover_qa().map_err(display_error)
-    }
-    #[cfg(not(feature = "qa-edition"))]
-    {
-        OpusPaths::discover().map_err(display_error)
+        let paths = OpusPaths::discover().map_err(display_error)?;
+        migrate_legacy_qa_offline_profile(&paths)?;
+        Ok(paths)
     }
 }
 
@@ -1382,41 +1289,40 @@ fn write_utility_settings_atomic(path: &Path, settings: &UtilitySettings) -> Res
     write_json_atomic(path, settings)
 }
 
-#[cfg(feature = "qa-edition")]
-fn qa_profile_path() -> Result<PathBuf, String> {
-    Ok(launcher_paths()?.root.join(QA_PROFILE_FILE))
-}
-
-#[cfg(feature = "qa-edition")]
-fn load_qa_profile() -> Result<Option<QaProfile>, String> {
-    let path = qa_profile_path()?;
-    if !path.exists() {
-        return Ok(None);
+fn migrate_legacy_qa_offline_profile(paths: &OpusPaths) -> Result<(), String> {
+    let marker = paths.root.join(LEGACY_QA_MIGRATION_FILE);
+    if marker.is_file() {
+        return Ok(());
     }
-    let bytes = fs::read(&path).map_err(display_error)?;
-    let profile = serde_json::from_slice(&bytes)
-        .map_err(|_| "Opus QA offline profile is invalid. Choose a username again.".to_owned())?;
-    Ok(Some(profile))
+
+    let legacy_profile_path = OpusPaths::legacy_qa_root()
+        .map_err(display_error)?
+        .join(LEGACY_QA_PROFILE_FILE);
+    if !legacy_profile_path.is_file() {
+        return Ok(());
+    }
+
+    let bytes = fs::read(&legacy_profile_path).map_err(display_error)?;
+    let Ok(profile) = serde_json::from_slice::<LegacyQaProfile>(&bytes) else {
+        // A malformed historical file must never block the unified launcher.
+        return Ok(());
+    };
+    if GameIdentity::offline(profile.username.trim()).is_err() {
+        return Ok(());
+    }
+
+    accounts::migrate_offline_profile(paths, profile.username.trim())?;
+    write_json_atomic(&marker, &serde_json::json!({ "schemaVersion": 1 }))
 }
 
-#[cfg(feature = "qa-edition")]
-fn validate_qa_profile(profile: &QaProfile) -> Result<(), String> {
-    GameIdentity::offline(&profile.username)
-        .map(|_| ())
-        .map_err(|error| {
-            format!("Offline username must be 3–16 letters, digits, or underscores. ({error})")
-        })
-}
-
-/// Compose the per-instance game window title so concurrently running
-/// instances are distinguishable, e.g. "Opus Client - [OFFICIAL] zvwgvx".
-/// A blank badge degrades gracefully to "Opus Client - <username>".
-fn instance_window_title(badge: &str, username: &str) -> String {
+/// Compose the launcher-only label for a running Minecraft process. It is not
+/// passed to Java or used to change the Minecraft window title.
+fn instance_display_label(badge: &str, username: &str) -> String {
     let badge = badge.trim();
     if badge.is_empty() {
-        format!("Opus Client - {username}")
+        format!("Minecraft - {username}")
     } else {
-        format!("Opus Client - [{}] {username}", badge.to_uppercase())
+        format!("Minecraft - [{}] {username}", badge.to_uppercase())
     }
 }
 
@@ -1432,6 +1338,12 @@ fn prepare_game_launch(
             "Rosetta is required for Minecraft 1.8.9 on this Mac, but it is unavailable".to_owned(),
         );
     }
+    if platform.os == OperatingSystem::MacOs {
+        let (ready, status) = macos_game_launch_readiness(app);
+        if !ready {
+            return Err(status);
+        }
+    }
 
     let paths = launcher_paths()?;
     let installer =
@@ -1441,7 +1353,7 @@ fn prepare_game_launch(
     })?;
     let (identity, account_id, username, badge) =
         resolve_launch_identity(&paths, requested_account_id)?;
-    let window_title = instance_window_title(&badge, &username);
+    let instance_label = instance_display_label(&badge, &username);
     let mut instance_paths = paths.clone();
     instance_paths.game = paths
         .root
@@ -1464,15 +1376,11 @@ fn prepare_game_launch(
         &identity,
         &LaunchOptions {
             max_memory_mib: settings.max_memory_mib,
-            utility_settings_file: Some(utility_settings_path()?),
-            brand_wordmark_file: Some(brand_wordmark_path(app)?),
-            window_title: Some(window_title.clone()),
             ..LaunchOptions::default()
         },
         &LaunchMode::ForgeBootstrap {
             bootstrap_jar: forge_artifacts.bootstrap_jar,
             coremod_jar: forge_artifacts.coremod_jar,
-            client_mod_jar: forge_artifacts.client_mod_jar,
         },
     )
     .map_err(display_error)?;
@@ -1483,7 +1391,7 @@ fn prepare_game_launch(
         account_id,
         username,
         badge,
-        window_title,
+        instance_label,
     })
 }
 
@@ -1507,42 +1415,43 @@ fn resolve_launch_identity(
             Ok((identity, record.id, username, badge))
         }
         ResolvedAccount::Microsoft(record) => {
-            #[cfg(feature = "qa-edition")]
-            {
-                let _ = record;
-                Err("Microsoft accounts are unavailable in the QA build".to_owned())
+            let authenticator = microsoft_authenticator()?;
+            let store = RefreshTokenStore::for_profile(&record.uuid).map_err(display_error)?;
+            // Do not enter the OAuth refresh path when this catalog entry
+            // has no file-backed credential. The launcher can report the
+            // actionable reconnect state immediately instead of making a
+            // broken official profile look like a hung game launch.
+            if store.load().map_err(display_error)?.is_none() {
+                return Err(format!(
+                    "Official profile '{}' requires reconnect before launching",
+                    record.username
+                ));
             }
-            #[cfg(not(feature = "qa-edition"))]
-            {
-                let authenticator = microsoft_authenticator()?;
-                let store = RefreshTokenStore::for_profile(&record.uuid).map_err(display_error)?;
-                let account = authenticator
-                    .refresh_session(&store)
-                    .map_err(display_error)?;
-                account
-                    .save_refresh_token_for_profile()
-                    .map_err(display_error)?;
-                let summary = accounts::upsert_microsoft(
-                    paths,
-                    &account.session.username,
-                    &account.session.uuid,
-                )?;
-                let identity = GameIdentity::authenticated(
-                    &account.session.username,
-                    &account.session.uuid,
-                    account.session.access_token.clone(),
-                    &account.session.user_type,
-                )
+            let account = authenticator
+                .refresh_session(&store)
                 .map_err(display_error)?;
-                let username = identity.username.clone();
-                let badge = summary.badge.clone();
-                Ok((identity, summary.id, username, badge))
-            }
+            account
+                .save_refresh_token_for_profile()
+                .map_err(display_error)?;
+            let summary = accounts::upsert_microsoft(
+                paths,
+                &account.session.username,
+                &account.session.uuid,
+            )?;
+            let identity = GameIdentity::authenticated(
+                &account.session.username,
+                &account.session.uuid,
+                account.session.access_token.clone(),
+                &account.session.user_type,
+            )
+            .map_err(display_error)?;
+            let username = identity.username.clone();
+            let badge = summary.badge.clone();
+            Ok((identity, summary.id, username, badge))
         }
     }
 }
 
-#[cfg(not(feature = "qa-edition"))]
 fn microsoft_authenticator() -> Result<MicrosoftAuthenticator, String> {
     MicrosoftAuthenticator::new(OPUS_MICROSOFT_CLIENT_ID.to_owned()).map_err(display_error)
 }
@@ -1555,25 +1464,86 @@ fn bootstrap_resource_directory(app: &AppHandle) -> Result<PathBuf, String> {
     )
 }
 
-fn brand_wordmark_path(app: &AppHandle) -> Result<PathBuf, String> {
-    launcher_resource_path(
-        app,
-        Path::new("brand/opus-wordmark-transparent.png"),
-        Path::new("resources/brand/opus-wordmark-transparent.png"),
-    )
-}
-
 fn macos_game_app_path(app: &AppHandle) -> Result<PathBuf, String> {
     let path = launcher_resource_path(
         app,
-        Path::new("Opus Client.app"),
-        Path::new("resources/Opus Client.app"),
+        Path::new("Minecraft.app"),
+        Path::new("resources/Minecraft.app"),
     )?;
-    let executable = path.join("Contents/MacOS/Opus Client");
+    let executable = path.join("Contents/MacOS/Minecraft");
     if !path.is_dir() || !executable.is_file() {
         return Err(format!("macOS game app is incomplete: {}", path.display()));
     }
+    let bytes = fs::read(&executable).map_err(display_error)?;
+    if !contains_binary_marker(&bytes, MACOS_GAME_STUB_CONTRACT_MARKER) {
+        return Err(
+            "The bundled macOS game launcher is stale. Reinstall Opus Launcher before launching Minecraft."
+                .to_owned(),
+        );
+    }
     Ok(path)
+}
+
+fn macos_game_launch_readiness(app: &AppHandle) -> (bool, String) {
+    let path = match macos_game_app_path(app) {
+        Ok(path) => path,
+        Err(error) => return (false, error),
+    };
+    match macos_console_is_locked() {
+        Ok(true) => (
+            false,
+            "macOS console is locked; unlock the Mac before launching Minecraft".to_owned(),
+        ),
+        Ok(false) => (
+            true,
+            format!("Packaged game launcher ready: {}", path.display()),
+        ),
+        Err(error) => (false, error),
+    }
+}
+
+fn contains_binary_marker(bytes: &[u8], marker: &[u8]) -> bool {
+    !marker.is_empty() && bytes.windows(marker.len()).any(|window| window == marker)
+}
+
+#[cfg(target_os = "macos")]
+fn macos_console_is_locked() -> Result<bool, String> {
+    let output = Command::new("/usr/sbin/ioreg")
+        .args(["-n", "Root", "-d1", "-a"])
+        .output()
+        .map_err(display_error)?;
+    if !output.status.success() {
+        return Err(format!(
+            "Could not inspect macOS console lock state (ioreg exited with {})",
+            output.status
+        ));
+    }
+    let document = String::from_utf8_lossy(&output.stdout);
+    let console_locked = ioreg_boolean(&document, "IOConsoleLocked");
+    let session_locked = ioreg_boolean(&document, "CGSSessionScreenIsLocked");
+    match (console_locked, session_locked) {
+        (Some(console), Some(session)) => Ok(console || session),
+        (Some(console), None) => Ok(console),
+        (None, Some(session)) => Ok(session),
+        (None, None) => Err("Could not determine macOS console lock state".to_owned()),
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn macos_console_is_locked() -> Result<bool, String> {
+    Ok(false)
+}
+
+fn ioreg_boolean(document: &str, key: &str) -> Option<bool> {
+    let marker = format!("<key>{key}</key>");
+    let value = document.split(&marker).nth(1)?.trim_start();
+    if value.starts_with("<true") {
+        Some(true)
+    } else if value.starts_with("<false") {
+        Some(false)
+    } else {
+        None
+    }
 }
 
 fn launcher_resource_path(
@@ -1608,7 +1578,6 @@ fn forge_bootstrap_artifacts(directory: &Path) -> Result<ForgeBootstrapArtifacts
 
     let mut bootstrap_jar = None;
     let mut coremod_jar = None;
-    let mut client_mod_jar = None;
     for entry in fs::read_dir(directory).map_err(display_error)? {
         let path = entry.map_err(display_error)?.path();
         if path.extension().and_then(|value| value.to_str()) != Some("jar") {
@@ -1639,12 +1608,6 @@ fn forge_bootstrap_artifacts(directory: &Path) -> Result<ForgeBootstrapArtifacts
                     "Opus bootstrap directory contains multiple Forge coremod JARs".to_owned(),
                 );
             }
-        } else if name.starts_with("opus-client-legacy-1.8.9-") && name.ends_with(".jar") {
-            if client_mod_jar.replace(path).is_some() {
-                return Err(
-                    "Opus bootstrap directory contains multiple Forge client-mod JARs".to_owned(),
-                );
-            }
         } else {
             return Err(format!(
                 "Opus bootstrap directory contains an unexpected JAR: {name}. Reinstall Opus Launcher."
@@ -1658,9 +1621,6 @@ fn forge_bootstrap_artifacts(directory: &Path) -> Result<ForgeBootstrapArtifacts
         coremod_jar: coremod_jar.ok_or_else(|| {
             "Opus Forge coremod JAR is missing. Reinstall Opus Launcher.".to_owned()
         })?,
-        client_mod_jar: client_mod_jar.ok_or_else(|| {
-            "Opus Forge client-mod JAR is missing. Reinstall Opus Launcher.".to_owned()
-        })?,
     })
 }
 
@@ -1669,34 +1629,7 @@ fn display_error(error: impl std::fmt::Display) -> String {
 }
 
 pub fn run() {
-    #[cfg(feature = "qa-edition")]
-    let builder = tauri::Builder::default()
-        .manage(AppState::default())
-        .invoke_handler(tauri::generate_handler![
-            launcher_snapshot,
-            install_minecraft,
-            import_optifine,
-            get_settings,
-            save_settings,
-            get_utility_settings,
-            save_utility_settings,
-            list_accounts,
-            select_account,
-            save_offline_profile,
-            remove_account,
-            account_skin,
-            get_qa_profile,
-            save_qa_profile,
-            launch_game,
-            list_instances,
-            kill_instance,
-        ]);
-
-    #[cfg(all(
-        debug_assertions,
-        feature = "developer-test-profile",
-        not(feature = "qa-edition")
-    ))]
+    #[cfg(all(debug_assertions, feature = "developer-test-profile"))]
     let builder = tauri::Builder::default()
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
@@ -1721,10 +1654,7 @@ pub fn run() {
             simulate_developer_game,
         ]);
 
-    #[cfg(all(
-        not(feature = "qa-edition"),
-        not(all(debug_assertions, feature = "developer-test-profile"))
-    ))]
+    #[cfg(not(all(debug_assertions, feature = "developer-test-profile")))]
     let builder = tauri::Builder::default()
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
@@ -1755,6 +1685,39 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stale_macos_stub_is_rejected_by_its_contract_marker() {
+        assert!(contains_binary_marker(
+            b"prefix macOS console is locked; unlock before launching Minecraft suffix",
+            MACOS_GAME_STUB_CONTRACT_MARKER,
+        ));
+        assert!(!contains_binary_marker(
+            b"old exec-only stub",
+            MACOS_GAME_STUB_CONTRACT_MARKER
+        ));
+    }
+
+    #[test]
+    fn instance_display_label_does_not_brand_the_game_as_an_opus_client() {
+        assert_eq!(
+            instance_display_label("official", "zvwgvx"),
+            "Minecraft - [OFFICIAL] zvwgvx"
+        );
+        assert_eq!(instance_display_label("", "zvwgvx"), "Minecraft - zvwgvx");
+    }
+
+    #[test]
+    fn ioreg_boolean_reads_true_and_false_values() {
+        let document =
+            "<key>IOConsoleLocked</key>\n<true/>\n<key>CGSSessionScreenIsLocked</key>\n<false/>";
+        assert_eq!(ioreg_boolean(document, "IOConsoleLocked"), Some(true));
+        assert_eq!(
+            ioreg_boolean(document, "CGSSessionScreenIsLocked"),
+            Some(false)
+        );
+        assert_eq!(ioreg_boolean(document, "missing"), None);
+    }
 
     #[test]
     fn settings_reject_memory_below_the_game_minimum() {
@@ -1901,13 +1864,11 @@ mod tests {
         assert!(validate_utility_settings(&settings).is_ok());
     }
 
-    #[cfg(not(feature = "qa-edition"))]
     #[test]
     fn embedded_microsoft_client_id_is_valid() {
         assert!(microsoft_authenticator().is_ok());
     }
 
-    #[cfg(not(feature = "qa-edition"))]
     #[test]
     fn task_owned_login_attempt_prevents_parallel_login_until_dropped() {
         let state = AppState::default();
@@ -1917,7 +1878,6 @@ mod tests {
         assert!(state.begin_login().is_ok());
     }
 
-    #[cfg(not(feature = "qa-edition"))]
     #[test]
     fn background_task_ownership_survives_the_callers_scope() {
         let state = AppState::default();
@@ -1937,7 +1897,6 @@ mod tests {
         assert!(state.begin_login().is_ok());
     }
 
-    #[cfg(not(feature = "qa-edition"))]
     #[test]
     fn cancellation_keeps_the_login_slot_until_task_cleanup_then_allows_retry() {
         let state = AppState::default();
@@ -1950,7 +1909,6 @@ mod tests {
         assert!(state.begin_login().is_ok());
     }
 
-    #[cfg(not(feature = "qa-edition"))]
     #[test]
     fn install_progress_event_only_serializes_safe_aggregate_fields() {
         let event = InstallProgressEvent::from(InstallProgress {
@@ -1972,56 +1930,15 @@ mod tests {
         assert!(object.get("token").is_none());
     }
 
-    #[cfg(feature = "qa-edition")]
     #[test]
-    fn qa_edition_exposes_an_offline_runtime_build() {
-        assert_eq!(build_edition(), BuildEdition::QaOffline);
+    fn launcher_has_one_unified_edition() {
+        assert_eq!(build_edition(), BuildEdition::Unified);
         let profile = AppState::default().developer_test_profile();
         assert!(!profile.available);
         assert!(!profile.active);
     }
 
-    #[cfg(feature = "qa-edition")]
-    #[test]
-    fn qa_profile_validation_accepts_only_minecraft_offline_usernames() {
-        assert!(
-            validate_qa_profile(&QaProfile {
-                username: "Qa_User9".to_owned(),
-            })
-            .is_ok()
-        );
-        assert!(
-            validate_qa_profile(&QaProfile {
-                username: "no spaces".to_owned(),
-            })
-            .is_err()
-        );
-        assert!(
-            validate_qa_profile(&QaProfile {
-                username: "ab".to_owned(),
-            })
-            .is_err()
-        );
-    }
-
-    #[cfg(feature = "qa-edition")]
-    #[test]
-    fn qa_profile_snapshot_has_no_token_or_uuid() {
-        let snapshot = OfflineProfileSnapshot::from(QaProfile {
-            username: "Qa_User9".to_owned(),
-        });
-        let value = serde_json::to_value(snapshot).unwrap();
-        assert_eq!(value.get("username"), Some(&serde_json::json!("Qa_User9")));
-        assert_eq!(value.get("valid"), Some(&serde_json::Value::Bool(true)));
-        assert!(value.get("accessToken").is_none());
-        assert!(value.get("uuid").is_none());
-    }
-
-    #[cfg(all(
-        debug_assertions,
-        feature = "developer-test-profile",
-        not(feature = "qa-edition")
-    ))]
+    #[cfg(all(debug_assertions, feature = "developer-test-profile"))]
     #[test]
     fn active_developer_profile_skips_real_snapshot_work() {
         let state = AppState::default();
@@ -2044,11 +1961,7 @@ mod tests {
         assert_eq!(snapshot.data_directory, "Not used by simulation");
     }
 
-    #[cfg(all(
-        debug_assertions,
-        feature = "developer-test-profile",
-        not(feature = "qa-edition")
-    ))]
+    #[cfg(all(debug_assertions, feature = "developer-test-profile"))]
     #[test]
     fn developer_profile_blocks_all_real_mode_entrypoints() {
         let state = AppState::default();
@@ -2057,11 +1970,7 @@ mod tests {
         assert!(state.require_runtime_mode().is_err());
     }
 
-    #[cfg(all(
-        debug_assertions,
-        feature = "developer-test-profile",
-        not(feature = "qa-edition")
-    ))]
+    #[cfg(all(debug_assertions, feature = "developer-test-profile"))]
     #[test]
     fn developer_simulation_has_a_deterministic_in_memory_lifecycle() {
         let state = AppState::default();
@@ -2088,11 +1997,7 @@ mod tests {
         assert!(state.developer_test.set_active(false).unwrap().available);
     }
 
-    #[cfg(all(
-        debug_assertions,
-        feature = "developer-test-profile",
-        not(feature = "qa-edition")
-    ))]
+    #[cfg(all(debug_assertions, feature = "developer-test-profile"))]
     #[test]
     fn developer_profile_cannot_be_disabled_while_a_simulation_is_running() {
         let state = AppState::default();
@@ -2107,11 +2012,7 @@ mod tests {
         assert!(!state.developer_test.set_active(false).unwrap().active);
     }
 
-    #[cfg(all(
-        debug_assertions,
-        feature = "developer-test-profile",
-        not(feature = "qa-edition")
-    ))]
+    #[cfg(all(debug_assertions, feature = "developer-test-profile"))]
     #[test]
     fn simulated_game_finished_event_has_no_log_directory_or_real_claim() {
         let event = GameLaunchFinished {

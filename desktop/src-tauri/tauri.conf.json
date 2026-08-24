@@ -19,7 +19,8 @@
         "minWidth": 980,
         "minHeight": 650,
         "resizable": true,
-        "center": true
+        "center": true,
+        "incognito": true
       }
     ],
     "security": {
@@ -38,8 +39,7 @@
     ],
     "resources": {
       "resources/bootstrap": "bootstrap",
-      "resources/brand": "brand",
-      "resources/Opus Client.app": "Opus Client.app"
+      "resources/Minecraft.app": "Minecraft.app"
     },
     "macOS": {
       "minimumSystemVersion": "11.0"

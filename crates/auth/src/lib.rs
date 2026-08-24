@@ -5,9 +5,10 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::io::{Read, Write};
 use std::net::{Ipv4Addr, Ipv6Addr, TcpListener, TcpStream};
+use std::path::{Path, PathBuf};
 use std::sync::{
     Arc,
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicU64, Ordering},
 };
 use std::thread;
 use std::time::{Duration, Instant};
@@ -27,15 +28,15 @@ const MINECRAFT_INVALID_APP_REGISTRATION_MESSAGE: &str =
     "Invalid app registration, see https://aka.ms/AppRegInfo for more information";
 const MINECRAFT_ENTITLEMENTS_URL: &str = "https://api.minecraftservices.com/entitlements/mcstore";
 const MINECRAFT_PROFILE_URL: &str = "https://api.minecraftservices.com/minecraft/profile";
-const KEYRING_SERVICE: &str = "org.polydevs.opusmc.launcher.microsoft.refresh-token";
-const KEYRING_ACCOUNT: &str = "default";
-const KEYRING_PROFILE_PREFIX: &str = "profile-";
+const TOKEN_ACCOUNT: &str = "default";
+const TOKEN_PROFILE_PREFIX: &str = "profile-";
 const LOOPBACK_CALLBACK_HOST: &str = "localhost";
 const LOOPBACK_CALLBACK_PATH: &str = "/";
 const BROWSER_AUTH_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const LOOPBACK_POLL_INTERVAL: Duration = Duration::from_millis(50);
 const CALLBACK_READ_TIMEOUT: Duration = Duration::from_secs(2);
 const MAX_CALLBACK_REQUEST_BYTES: usize = 8 * 1024;
+static TOKEN_TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone)]
 pub struct MinecraftSession {
@@ -510,12 +511,12 @@ impl MicrosoftAuthenticator {
 }
 
 pub struct RefreshTokenStore {
-    entry: keyring::Entry,
+    path: PathBuf,
 }
 
 impl RefreshTokenStore {
     pub fn new() -> Result<Self, AuthError> {
-        Self::for_keyring_account(KEYRING_ACCOUNT)
+        Self::for_account(TOKEN_ACCOUNT)
     }
 
     pub fn for_profile(profile_uuid: &str) -> Result<Self, AuthError> {
@@ -525,12 +526,12 @@ impl RefreshTokenStore {
                 "Microsoft profile identifier is invalid".to_owned(),
             ));
         }
-        Self::for_keyring_account(&format!("{KEYRING_PROFILE_PREFIX}{normalized}"))
+        Self::for_account(&format!("{TOKEN_PROFILE_PREFIX}{normalized}"))
     }
 
-    fn for_keyring_account(account: &str) -> Result<Self, AuthError> {
+    fn for_account(account: &str) -> Result<Self, AuthError> {
         Ok(Self {
-            entry: keyring::Entry::new(KEYRING_SERVICE, account)?,
+            path: token_dir()?.join(format!("{account}.token")),
         })
     }
 
@@ -538,26 +539,98 @@ impl RefreshTokenStore {
         if refresh_token.is_empty() {
             return Err(AuthError::EmptyRefreshToken);
         }
-        self.entry.set_password(refresh_token)?;
+        if let Some(parent) = self.path.parent() {
+            ensure_private_dir(parent)?;
+        }
+        // Write to a sibling temp file then rename, so a crash mid-write never
+        // leaves a truncated token behind.
+        let mut temp = self.path.clone();
+        let name = self
+            .path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or("token");
+        let sequence = TOKEN_TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        temp.set_file_name(format!(".{name}.{}.{}.tmp", std::process::id(), sequence));
+        if let Err(error) = write_private(&temp, refresh_token.as_bytes()) {
+            let _ = std::fs::remove_file(&temp);
+            return Err(error);
+        }
+        if let Err(error) = std::fs::rename(&temp, &self.path) {
+            let _ = std::fs::remove_file(&temp);
+            return Err(AuthError::TokenStore(error));
+        }
         Ok(())
     }
 
     pub fn load(&self) -> Result<Option<String>, AuthError> {
-        match self.entry.get_password() {
-            Ok(token) => Ok(Some(token)),
-            Err(keyring::Error::NoEntry) => Ok(None),
-            Err(error) => Err(error.into()),
+        match std::fs::read_to_string(&self.path) {
+            Ok(token) => {
+                let token = token.trim().to_owned();
+                Ok(if token.is_empty() { None } else { Some(token) })
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(AuthError::TokenStore(error)),
         }
     }
 
     pub fn delete(&self) -> Result<bool, AuthError> {
-        let deleted = match self.entry.delete_credential() {
-            Ok(()) => true,
-            Err(keyring::Error::NoEntry) => false,
-            Err(error) => return Err(error.into()),
-        };
-        Ok(deleted)
+        match std::fs::remove_file(&self.path) {
+            Ok(()) => Ok(true),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(error) => Err(AuthError::TokenStore(error)),
+        }
     }
+}
+
+/// Directory holding the Microsoft refresh tokens. It lives under the user's
+/// data directory, deliberately outside the app bundle, so the stored login
+/// survives reinstalls. `OPUS_AUTH_DIR` overrides it for tests and custom
+/// setups. Tokens are stored as plaintext files (not the OS keychain) so the
+/// launcher never triggers a keychain-unlock prompt; on Unix each file is
+/// created 0600 so only the owner can read it.
+fn token_dir() -> Result<PathBuf, AuthError> {
+    if let Some(dir) = std::env::var_os("OPUS_AUTH_DIR") {
+        return Ok(PathBuf::from(dir));
+    }
+    let home = std::env::var_os("HOME").ok_or_else(|| {
+        AuthError::TokenStore(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "HOME environment variable is not set",
+        ))
+    })?;
+    let base = PathBuf::from(home);
+    #[cfg(target_os = "macos")]
+    let dir = base.join("Library/Application Support/opus/auth");
+    #[cfg(not(target_os = "macos"))]
+    let dir = base.join(".local/share/opus/auth");
+    Ok(dir)
+}
+
+fn write_private(path: &Path, bytes: &[u8]) -> Result<(), AuthError> {
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(path).map_err(AuthError::TokenStore)?;
+    file.write_all(bytes).map_err(AuthError::TokenStore)?;
+    file.flush().map_err(AuthError::TokenStore)?;
+    file.sync_all().map_err(AuthError::TokenStore)?;
+    Ok(())
+}
+
+fn ensure_private_dir(path: &Path) -> Result<(), AuthError> {
+    std::fs::create_dir_all(path).map_err(AuthError::TokenStore)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
+            .map_err(AuthError::TokenStore)?;
+    }
+    Ok(())
 }
 
 fn decode_success<T: for<'de> Deserialize<'de>>(
@@ -897,8 +970,8 @@ pub enum AuthError {
     Http(#[from] reqwest::Error),
     #[error("authentication service returned invalid JSON")]
     Json(#[from] serde_json::Error),
-    #[error("secure credential storage failed")]
-    Keyring(#[from] keyring::Error),
+    #[error("refresh token storage failed")]
+    TokenStore(#[source] std::io::Error),
     #[error("authentication service response is invalid: {0}")]
     InvalidServiceResponse(String),
     #[error("{service} rejected the request (HTTP {status}, code {code})")]
@@ -1145,5 +1218,57 @@ mod tests {
         .unwrap();
         assert_eq!(payload.token, "xbox-token");
         assert_eq!(payload.display_claims.xui[0].user_hash, "12345");
+    }
+
+    #[test]
+    fn refresh_token_store_round_trips_and_deletes_a_local_file() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("profile-test.token");
+        let store = RefreshTokenStore { path: path.clone() };
+
+        assert_eq!(store.load().unwrap(), None);
+        assert!(!store.delete().unwrap());
+        assert!(matches!(store.save(""), Err(AuthError::EmptyRefreshToken)));
+
+        store.save("refresh-token").unwrap();
+        assert_eq!(store.load().unwrap().as_deref(), Some("refresh-token"));
+        let temporary_files = std::fs::read_dir(directory.path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_name().to_string_lossy().ends_with(".tmp"))
+            .count();
+        assert_eq!(temporary_files, 0);
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(directory.path())
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o700
+            );
+            assert_eq!(
+                std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+
+        assert!(store.delete().unwrap());
+        assert_eq!(store.load().unwrap(), None);
+        assert!(!store.delete().unwrap());
+    }
+
+    #[test]
+    fn refresh_token_store_profile_paths_are_normalized_and_validated() {
+        let store = RefreshTokenStore::for_profile("01234567-89ab-cdef-0123-456789abcdef").unwrap();
+        assert_eq!(
+            store.path.file_name().unwrap(),
+            "profile-0123456789abcdef0123456789abcdef.token"
+        );
+        assert!(RefreshTokenStore::for_profile("not-a-profile").is_err());
+        assert!(RefreshTokenStore::for_profile("../../0123456789abcdef0123456789abcdef").is_err());
     }
 }

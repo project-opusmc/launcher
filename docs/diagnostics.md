@@ -4,12 +4,10 @@ Each managed game launch has a local session directory. The launcher returns
 that directory with the game-finished event, and it normally lives under
 `<OPUS data root>/logs/<session-id>/`.
 
-The default data root is `~/.opus-launcher` on macOS and Linux for Premium, and
-`~/.opus-launcher-qa` for the offline QA build. On Windows the corresponding
-roots are under `%LOCALAPPDATA%/OpusLauncher` and
-`%LOCALAPPDATA%/OpusLauncherQA`.
-`OPUS_HOME` overrides the Premium root; `OPUS_QA_HOME` overrides only the QA
-root.
+The unified launcher's default data root is `~/.opus-launcher` on macOS and
+Linux, or `%LOCALAPPDATA%/OpusLauncher` on Windows. `OPUS_HOME` overrides that
+root. A historic `~/.opus-launcher-qa/offline-profile-v1.json` is migration
+input only; it is never a live runtime root.
 
 ## Files in a session
 

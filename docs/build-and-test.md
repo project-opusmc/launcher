@@ -28,11 +28,9 @@ The script runs:
 
 1. `cargo fmt --all -- --check`
 2. `cargo clippy --workspace --all-targets -- -D warnings`
-3. QA/UI Preview feature clippy with warnings denied
-4. `cargo test --workspace`
-5. QA-edition Rust tests
-6. `npm --prefix desktop run check`
-7. `npm --prefix desktop run build`
+3. `cargo test --workspace`
+4. `npm --prefix desktop run check`
+5. `npm --prefix desktop run build`
 
 With live access to Mojang's official endpoints, add the pinned metadata test:
 
@@ -53,7 +51,6 @@ runtime-manifest.json
 runtime-checksums.json
 artifacts/opus-bootstrap-<version>.jar
 artifacts/opus-runtime-legacy-1.8.9-<version>.jar
-artifacts/opus-client-legacy-1.8.9-<version>.jar
 ```
 
 Stage and verify it with:
@@ -65,35 +62,32 @@ OPUS_RUNTIME_ARTIFACT_DIR=/path/to/runtime/build/runtime \
 
 `stage-runtime-artifacts.mjs` validates the schema, artifact roles, filenames,
 sizes, and SHA-256 values before copying anything into Tauri resources.
+The production staging gate also verifies that launcher windows remain
+non-persistent (`incognito: true`) so the file-owned vault is the only
+credential store. It rejects any unexpected Runtime artifact rather than
+allowing an old UI/client JAR back into a bundle.
 
 ## Desktop Bundles
 
-Premium:
+Unified launcher:
 
 ```bash
 OPUS_RUNTIME_ARTIFACT_DIR=/path/to/runtime/build/runtime \
-  npm --prefix desktop run tauri:build:premium
+  npm --prefix desktop run tauri:build
 ```
 
 Output on macOS:
 `target/release/bundle/macos/Opus Launcher.app`.
 
-Internal QA:
-
-```bash
-OPUS_RUNTIME_ARTIFACT_DIR=/path/to/runtime/build/runtime \
-  npm --prefix desktop run tauri:build:qa
-```
-
-Output on macOS:
-`target/debug/bundle/macos/Opus Launcher QA.app`. QA is intentionally a debug,
-offline-only bundle with an isolated identifier and data root.
+The bundle command runs `assert-file-only-bundle.sh` after Tauri creates the
+macOS app. A successful build therefore verifies the file-only credential
+contract and the Core-Mod-first artifact boundary (two runtime JARs only, no
+retired CEF/client payload, and the stock `Minecraft` host/Dock label).
 
 Install locally after building:
 
 ```bash
-npm --prefix desktop run tauri:install:premium
-npm --prefix desktop run tauri:install:qa
+npm --prefix desktop run tauri:install
 ```
 
 The installers refuse to replace a running OPUS app, stage and validate the
@@ -110,7 +104,7 @@ cargo run -p opus-cli -- launch --offline --dry-run
 ```
 
 On macOS, a real CLI game launch is blocked because the packaged
-`Opus Client.app` LaunchServices stub is required to preserve the foreground
+`Minecraft.app` LaunchServices host stub is required to preserve the foreground
 application identity. Use the packaged desktop Launcher for a real launch.
 
 ## Environment Variables
@@ -118,20 +112,10 @@ application identity. Use the packaged desktop Launcher for a real launch.
 | Variable | Effect |
 | --- | --- |
 | `OPUS_RUNTIME_ARTIFACT_DIR` | Verified Runtime output used for desktop packaging. |
-| `OPUS_HOME` | Overrides the Premium data root. |
-| `OPUS_QA_HOME` | Overrides the QA data root; must be absolute and isolated. |
-| `OPUS_UI_PREVIEW_HOME` | Overrides the UI Preview data root; must be absolute and isolated. |
+| `OPUS_HOME` | Overrides the unified launcher data root. |
 | `OPUS_MICROSOFT_CLIENT_ID` | CLI-only OAuth client ID override. |
 | `OPUS_CHECK_OFFICIAL=1` | Adds the live Mojang metadata test. |
 | `OPUS_GAME_WORKDIR` | Internal variable set for the macOS game stub. |
-
-For a disposable QA run:
-
-```bash
-OPUS_QA_HOME="$HOME/tmp/opus-launcher-qa" \
-OPUS_RUNTIME_ARTIFACT_DIR=/path/to/runtime/build/runtime \
-  npm --prefix desktop run tauri:dev:qa
-```
 
 ## Test Ownership
 
@@ -140,7 +124,7 @@ OPUS_RUNTIME_ARTIFACT_DIR=/path/to/runtime/build/runtime \
 | `crates/platform` | platform detection, Java parsing, and data-root isolation |
 | `crates/engine` | pinned metadata, downloads, install state, Forge staging, launch plans, native extraction, and secret-free process arguments |
 | `crates/auth` | PKCE, callback validation, cancellation, token redaction, and Minecraft service error handling |
-| `desktop/src-tauri` | settings, multi-account catalog, multi-instance coordination, IPC payloads, and QA profile validation |
+| `desktop/src-tauri` | settings, unified official/offline account catalog, multi-instance coordination, and IPC payloads |
 | `desktop/src` | TypeScript contracts and production frontend build |
 
 Session diagnostics and launch triage are documented in

@@ -140,7 +140,6 @@ pub fn select(paths: &OpusPaths, id: &str) -> Result<AccountSummary, String> {
         .ok_or_else(|| "The selected account could not be loaded".to_owned())
 }
 
-#[cfg(not(feature = "qa-edition"))]
 pub fn upsert_microsoft(
     paths: &OpusPaths,
     username: &str,
@@ -180,6 +179,24 @@ pub fn upsert_microsoft(
 }
 
 pub fn upsert_offline(paths: &OpusPaths, username: &str) -> Result<AccountSummary, String> {
+    upsert_offline_with_selection(paths, username, true)
+}
+
+/// Import a legacy offline profile without replacing the user's current
+/// selection. The unified launcher uses this once when it discovers data left
+/// by the retired QA package.
+pub fn migrate_offline_profile(
+    paths: &OpusPaths,
+    username: &str,
+) -> Result<AccountSummary, String> {
+    upsert_offline_with_selection(paths, username, false)
+}
+
+fn upsert_offline_with_selection(
+    paths: &OpusPaths,
+    username: &str,
+    select_profile: bool,
+) -> Result<AccountSummary, String> {
     let _catalog_lock = lock_catalog();
     let identity = GameIdentity::offline(username).map_err(display_error)?;
     let uuid = identity.uuid.clone();
@@ -202,7 +219,9 @@ pub fn upsert_offline(paths: &OpusPaths, username: &str) -> Result<AccountSummar
     } else {
         view.file.accounts.push(record);
     }
-    view.file.selected_account_id = Some(id.clone());
+    if select_profile || view.file.selected_account_id.is_none() {
+        view.file.selected_account_id = Some(id.clone());
+    }
     save(paths, &view.file)?;
     view.summaries()
         .into_iter()
@@ -352,7 +371,6 @@ fn account_ready(account: &AccountRecord) -> bool {
     }
 }
 
-#[cfg(any(not(feature = "qa-edition"), test))]
 fn retained_microsoft_badge(file: &AccountFile, id: &str) -> String {
     file.accounts
         .iter()
@@ -426,6 +444,26 @@ mod tests {
             summaries.iter().filter(|account| account.selected).count(),
             1
         );
+    }
+
+    #[test]
+    fn legacy_offline_profile_does_not_replace_the_current_selection() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = OpusPaths::from_root(directory.path().join("opus")).unwrap();
+        let selected = offline_record("AlphaOne");
+        save(
+            &paths,
+            &AccountFile {
+                schema_version: ACCOUNT_SCHEMA_VERSION,
+                selected_account_id: Some(selected.id.clone()),
+                accounts: vec![selected.clone()],
+            },
+        )
+        .unwrap();
+
+        let migrated = migrate_offline_profile(&paths, "BetaTwo").unwrap();
+        assert!(!migrated.selected);
+        assert_eq!(selected_id(&load(&paths).unwrap()), Some(selected.id));
     }
 
     #[test]

@@ -20,27 +20,18 @@
 7. Minecraft opens as the normal Forge 1.8.9 client: Singleplayer, Multiplayer,
    Options and Quit remain vanilla UI.
 
-## QA offline flavor
+## Unified account catalog
 
-The QA artifact is a separate debug launcher used before Premium sign-in is
-released. It has its own Tauri identifier and icon, its own runtime/settings
-root, and packages the same verified Forge bridge/coremod as the Premium
-application. It can install and launch the managed Forge profile rather than
-simulating a game lifecycle, but it still requires a locally imported verified
-OptiFine JAR.
+One Opus Launcher bundle owns both Microsoft and offline identities. The
+offline path stores only a Minecraft-compatible username, derives its
+deterministic offline UUID, and never reads a Microsoft credential or opens the
+credential vault for that identity. It uses the same verified Forge bridge,
+Core Mod, and locally imported OptiFine contract as an official identity.
 
-QA replaces Microsoft sign-in, ownership verification, and keychain access
-with a saved Minecraft-compatible username. The backend builds a deterministic
-offline Minecraft identity for that name, so it never receives or stores a
-Premium credential. The resulting session is intentionally accepted only by
-servers with `online-mode=false`; a correctly configured `online-mode=true`
-server rejects it through normal Minecraft session authentication.
-
-Offline-mode is not an identity or access-control system. QA sessions must use
-operator-controlled servers with an appropriate whitelist and moderation
-policy, because a player can choose another player's offline username. The QA
-bundle is not a fallback for the Premium launcher and must not be published as
-a production artifact. See [QA offline operations](qa-offline.md).
+Offline mode is not an identity or access-control system. Offline sessions
+must use operator-controlled `online-mode=false` servers with an appropriate
+whitelist and moderation policy, because a player can choose another player's
+offline username. See [offline profile operations](qa-offline.md).
 
 ## Components
 
@@ -49,7 +40,7 @@ a production artifact. See [QA offline operations](qa-offline.md).
 | `desktop/` | React/TypeScript launcher views and local presentation state. |
 | `desktop/src-tauri/` | Tauri commands, non-secret settings and background jobs. |
 | `crates/engine/` | Verified Mojang + locked Forge install/cache, local OptiFine import, native extraction and launch plan. |
-| `crates/auth/` | Microsoft browser OAuth with PKCE, Xbox/Minecraft exchange and keychain refresh credential. |
+| `crates/auth/` | Microsoft browser OAuth with PKCE, Xbox/Minecraft exchange and Opus-local refresh credential vault. |
 | OPUS Runtime artifacts | Versioned bootstrap, Forge coremod, telemetry, transformers, and in-game UI supplied by the Runtime repository. |
 | macOS game stub | LaunchServices app that immediately `exec`s the managed Java 8 process, preserving its foreground app identity. |
 
@@ -68,14 +59,14 @@ not configure this and OPUS must not borrow another launcher's Client ID.
 - Only checksum-verified managed artifacts enter the game classpath; OptiFine
   is checksum-verified after a local user import and is never downloaded or
   bundled by OPUS.
-- QA permits only the verified OPUS coremod and exact imported OptiFine JAR in
-  its managed Forge mod set.
+- The unified launcher permits only the verified OPUS coremod and exact
+  imported OptiFine JAR in every managed Forge mod set.
 - On macOS, Minecraft 1.8.9 launches through a compiled app stub. JVM options intended for later `FirstThreadOnMacOS` snapshots are not applied to 1.8.9.
 - The launcher ships with its first-party public Microsoft application Client
   ID. It opens the official Microsoft account page in the system browser and
   accepts only a matching PKCE/state-protected localhost callback; refresh
-  credentials remain in the operating-system keychain.
-- An authenticated game session requires a keychain-backed account, not a
+  credentials remain in Opus's private local vault.
+- An authenticated game session requires an Opus-vault-backed account, not a
   user-supplied Client ID or client secret.
 - Settings cannot change the locked Minecraft version or escape OPUS's data
   directory.

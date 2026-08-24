@@ -1,7 +1,6 @@
 use crate::{
-    FORGE_CLIENT_MOD_SHA1, FORGE_CLIENT_MOD_SIZE, FORGE_COREMOD_SHA1, FORGE_COREMOD_SIZE,
-    FORGE_RUNTIME_ID, ForgeRuntimeLock, InstalledMinecraft, ManagedJava, MinecraftLayout,
-    extract_natives, verify_file,
+    FORGE_COREMOD_SHA1, FORGE_COREMOD_SIZE, FORGE_RUNTIME_ID, ForgeRuntimeLock, InstalledMinecraft,
+    ManagedJava, MinecraftLayout, extract_natives, verify_file,
 };
 use md5::{Digest, Md5};
 use opus_platform::{OperatingSystem, Platform};
@@ -18,6 +17,7 @@ use thiserror::Error;
 const SESSION_MANIFEST_SCHEMA_VERSION: u32 = 1;
 const DIAGNOSTICS_SCHEMA_VERSION: u32 = 1;
 const LAUNCHER_SUMMARY_SCHEMA_VERSION: u32 = 1;
+const MACOS_GAME_WINDOW_STARTUP_TIMEOUT: Duration = Duration::from_secs(90);
 
 #[derive(Clone)]
 pub struct GameIdentity {
@@ -70,10 +70,6 @@ impl GameIdentity {
             user_properties: "{}".to_owned(),
         })
     }
-
-    fn is_authenticated(&self) -> bool {
-        self.access_token.len() >= 8
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -84,11 +80,6 @@ pub struct LaunchOptions {
     pub height: Option<u32>,
     pub utility_settings_file: Option<PathBuf>,
     pub brand_wordmark_file: Option<PathBuf>,
-    /// Per-instance game window title. When set, the runtime window-title patch
-    /// renders this exact string so concurrent instances are distinguishable
-    /// (for example "Opus Client - [OFFICIAL] zvwgvx"). `None` keeps the shared
-    /// default "Opus Client".
-    pub window_title: Option<String>,
 }
 
 impl Default for LaunchOptions {
@@ -100,24 +91,18 @@ impl Default for LaunchOptions {
             height: None,
             utility_settings_file: None,
             brand_wordmark_file: None,
-            window_title: None,
         }
     }
 }
 
 #[derive(Debug, Clone)]
 pub enum LaunchMode {
-    Direct,
-    Bootstrap {
-        classpath: Vec<PathBuf>,
-    },
     /// Forge owns Minecraft's class loader. The small Opus bootstrap keeps
-    /// identity arguments off the process command line, while the Opus coremod
-    /// and typed client mod are staged into the isolated Forge `mods` directory.
+    /// identity arguments off the process command line, while the Opus Core Mod
+    /// is staged into the isolated Forge `mods` directory.
     ForgeBootstrap {
         bootstrap_jar: PathBuf,
         coremod_jar: PathBuf,
-        client_mod_jar: PathBuf,
     },
 }
 
@@ -141,7 +126,6 @@ pub struct LaunchPlan {
 struct ForgeLaunchContract {
     optifine: crate::DownloadSpec,
     coremod: crate::DownloadSpec,
-    client_mod: crate::DownloadSpec,
 }
 
 struct LaunchBuildRequest<'a> {
@@ -166,7 +150,6 @@ impl ForgeLaunchContract {
                 size: Some(lock.optifine.size),
             },
             coremod: forge_coremod_spec(),
-            client_mod: forge_client_mod_spec(),
         })
     }
 }
@@ -323,12 +306,6 @@ impl LaunchPlan {
                 brand_wordmark_file,
             ));
         }
-        if let Some(window_title) = &options.window_title {
-            let sanitized = sanitize_window_title(window_title);
-            if !sanitized.is_empty() {
-                jvm_arguments.push(OsString::from(format!("-Dopus.window.title={sanitized}")));
-            }
-        }
         if let (Some(logging), Some(path)) = (&minecraft.version.logging, &minecraft.logging_config)
         {
             let filtered_path = session_directory.join("log4j-opus.xml");
@@ -353,90 +330,40 @@ impl LaunchPlan {
             ]);
         }
 
-        let (system_classpath, main_class, game_arguments, stdin_payload) = match mode {
-            LaunchMode::Direct => {
-                if identity.is_authenticated() {
-                    return Err(LaunchError::AuthenticatedDirectLaunchForbidden);
-                }
-                (
-                    minecraft.classpath.clone(),
-                    minecraft.main_class.clone(),
-                    vanilla_arguments,
-                    None,
-                )
-            }
-            LaunchMode::Bootstrap { classpath } => {
-                if minecraft.runtime_id == FORGE_RUNTIME_ID {
-                    return Err(LaunchError::ForgeBootstrapRequired);
-                }
-                validate_bootstrap_classpath(classpath)?;
-                let absolute_bootstrap_classpath = canonicalize_classpath(classpath)?;
-                let game_classpath_file = session_directory.join("game-classpath.txt");
-                write_classpath_file(&game_classpath_file, &minecraft.classpath)?;
-                let bootstrap_arguments = vec![
-                    OsString::from("--opus-game-main"),
-                    OsString::from(&minecraft.main_class),
-                    OsString::from("--opus-game-classpath-file"),
-                    game_classpath_file.into_os_string(),
-                    OsString::from("--opus-game-arguments-stdin"),
-                ];
-                let payload = encode_game_arguments(&vanilla_arguments)?;
-                (
-                    absolute_bootstrap_classpath,
-                    "org.polydevs.opusmc.bootstrap.BootstrapMain".to_owned(),
-                    bootstrap_arguments,
-                    Some(payload),
-                )
-            }
-            LaunchMode::ForgeBootstrap {
-                bootstrap_jar,
-                coremod_jar,
-                client_mod_jar,
-            } => {
-                let pinned_contract = if forge_contract.is_none() {
-                    Some(ForgeLaunchContract::pinned()?)
-                } else {
-                    None
-                };
-                let contract = forge_contract
-                    .or(pinned_contract.as_ref())
-                    .expect("Forge launch must have an integrity contract");
-                if minecraft.runtime_id != FORGE_RUNTIME_ID {
-                    return Err(LaunchError::ForgeRuntimeRequired(
-                        minecraft.runtime_id.clone(),
-                    ));
-                }
-                let optifine_jar = minecraft
-                    .optifine_jar
-                    .as_deref()
-                    .ok_or(LaunchError::OptiFineRequired)?;
-                let staged_optifine =
-                    stage_forge_optifine(layout, optifine_jar, &contract.optifine)?;
-                let staged_coremod = stage_forge_coremod(layout, coremod_jar, &contract.coremod)?;
-                let staged_client_mod =
-                    stage_forge_client_mod(layout, client_mod_jar, &contract.client_mod)?;
-                validate_managed_forge_mods(
-                    layout,
-                    &staged_optifine,
-                    &staged_coremod,
-                    &staged_client_mod,
-                )?;
-
-                let bootstrap = canonicalize_single_bootstrap_jar(bootstrap_jar)?;
-                let game_classpath = canonicalize_classpath(&minecraft.classpath)?;
-                let mut system_classpath = Vec::with_capacity(game_classpath.len() + 1);
-                system_classpath.push(bootstrap);
-                system_classpath.extend(game_classpath);
-                let bootstrap_arguments = vec![OsString::from("--opus-game-arguments-stdin")];
-                let payload = encode_game_arguments(&vanilla_arguments)?;
-                (
-                    system_classpath,
-                    "org.polydevs.opusmc.bootstrap.ForgeBootstrapMain".to_owned(),
-                    bootstrap_arguments,
-                    Some(payload),
-                )
-            }
+        let LaunchMode::ForgeBootstrap {
+            bootstrap_jar,
+            coremod_jar,
+        } = mode;
+        let pinned_contract = if forge_contract.is_none() {
+            Some(ForgeLaunchContract::pinned()?)
+        } else {
+            None
         };
+        let contract = forge_contract
+            .or(pinned_contract.as_ref())
+            .expect("Forge launch must have an integrity contract");
+        if minecraft.runtime_id != FORGE_RUNTIME_ID {
+            return Err(LaunchError::ForgeRuntimeRequired(
+                minecraft.runtime_id.clone(),
+            ));
+        }
+        let optifine_jar = minecraft
+            .optifine_jar
+            .as_deref()
+            .ok_or(LaunchError::OptiFineRequired)?;
+        let staged_optifine = stage_forge_optifine(layout, optifine_jar, &contract.optifine)?;
+        let staged_coremod = stage_forge_coremod(layout, coremod_jar, &contract.coremod)?;
+        remove_retired_forge_client_mod(layout)?;
+        validate_managed_forge_mods(layout, &staged_optifine, &staged_coremod)?;
+
+        let bootstrap = canonicalize_single_bootstrap_jar(bootstrap_jar)?;
+        let game_classpath = canonicalize_classpath(&minecraft.classpath)?;
+        let mut system_classpath = Vec::with_capacity(game_classpath.len() + 1);
+        system_classpath.push(bootstrap);
+        system_classpath.extend(game_classpath);
+        let game_arguments = vec![OsString::from("--opus-game-arguments-stdin")];
+        let stdin_payload = Some(encode_game_arguments(&vanilla_arguments)?);
+        let main_class = "org.polydevs.opusmc.bootstrap.ForgeBootstrapMain".to_owned();
         let classpath = std::env::join_paths(&system_classpath)
             .map_err(|source| LaunchError::InvalidClasspath(source.to_string()))?;
         jvm_arguments.push(OsString::from("-cp"));
@@ -528,37 +455,17 @@ fn write_json_private<T: Serialize>(path: &Path, value: &T) -> Result<(), Launch
 
 fn launch_mode_name(mode: &LaunchMode) -> &'static str {
     match mode {
-        LaunchMode::Direct => "direct",
-        LaunchMode::Bootstrap { .. } => "bootstrap",
         LaunchMode::ForgeBootstrap { .. } => "forge-bootstrap",
     }
 }
 
-/// Normalize a per-instance window title into a single printable line before it
-/// reaches the JVM system property. The runtime patch also sanitizes, but the
-/// launcher enforces the same contract so a stray newline can never split the
-/// `-Dopus.window.title=` argument into an unintended JVM flag.
-fn sanitize_window_title(raw: &str) -> String {
-    raw.chars()
-        .map(|character| {
-            if character.is_control() {
-                ' '
-            } else {
-                character
-            }
-        })
-        .collect::<String>()
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .chars()
-        .take(120)
-        .collect()
-}
-
 fn platform_jvm_arguments(os: OperatingSystem) -> Vec<OsString> {
     match os {
-        OperatingSystem::MacOs => vec![OsString::from("-Xdock:name=Opus Client")],
+        // Java 8u74's AWT/AppKit bridge crashes on this macOS host when
+        // `-XstartOnFirstThread` is supplied. LWJGL still initializes its
+        // window on the JVM's normal launch thread, so keep only the stock
+        // Minecraft dock label here.
+        OperatingSystem::MacOs => vec![OsString::from("-Xdock:name=Minecraft")],
         OperatingSystem::Windows | OperatingSystem::Linux => Vec::new(),
     }
 }
@@ -573,27 +480,6 @@ fn canonicalize_classpath(classpath: &[PathBuf]) -> Result<Vec<PathBuf>, LaunchE
             })
         })
         .collect()
-}
-
-fn validate_bootstrap_classpath(classpath: &[PathBuf]) -> Result<(), LaunchError> {
-    if classpath.is_empty() {
-        return Err(LaunchError::EmptyBootstrapClasspath);
-    }
-    let has_bootstrap = classpath.iter().any(|path| {
-        path.file_name()
-            .and_then(OsStr::to_str)
-            .map(|name| name.starts_with("opus-bootstrap-") && name.ends_with(".jar"))
-            .unwrap_or(false)
-    });
-    if !has_bootstrap {
-        return Err(LaunchError::MissingBootstrapJar);
-    }
-    for entry in classpath {
-        if !entry.is_file() {
-            return Err(LaunchError::MissingBootstrapEntry(entry.clone()));
-        }
-    }
-    Ok(())
 }
 
 fn canonicalize_single_bootstrap_jar(path: &Path) -> Result<PathBuf, LaunchError> {
@@ -695,16 +581,6 @@ fn forge_coremod_spec() -> crate::DownloadSpec {
     }
 }
 
-fn forge_client_mod_spec() -> crate::DownloadSpec {
-    crate::DownloadSpec {
-        // This is not a download endpoint: the checked-in release artifact is
-        // verified locally before staging beside the managed Forge coremod.
-        url: "https://opus.invalid/release/opus-client-legacy-1.8.9.jar".to_owned(),
-        sha1: FORGE_CLIENT_MOD_SHA1.to_owned(),
-        size: Some(FORGE_CLIENT_MOD_SIZE),
-    }
-}
-
 fn validate_forge_coremod(path: &Path, spec: &crate::DownloadSpec) -> Result<(), LaunchError> {
     if !path.is_file() {
         return Err(LaunchError::MissingForgeCoremod(path.to_path_buf()));
@@ -734,76 +610,6 @@ fn validate_forge_coremod(path: &Path, spec: &crate::DownloadSpec) -> Result<(),
     Ok(())
 }
 
-fn stage_forge_client_mod(
-    layout: &MinecraftLayout,
-    source: &Path,
-    spec: &crate::DownloadSpec,
-) -> Result<PathBuf, LaunchError> {
-    validate_forge_client_mod(source, spec)?;
-    let mods_directory = layout.mods_dir();
-    fs::create_dir_all(&mods_directory)?;
-    let destination = mods_directory.join("opus-client-legacy-1.8.9.jar");
-    let temporary = mods_directory.join(format!(".opus-client.part-{}", std::process::id()));
-    if temporary.exists() {
-        fs::remove_file(&temporary)?;
-    }
-    let result = (|| -> Result<(), LaunchError> {
-        fs::copy(source, &temporary)?;
-        validate_forge_client_mod(&temporary, spec)?;
-        #[cfg(windows)]
-        if destination.exists() {
-            fs::remove_file(&destination)?;
-        }
-        fs::rename(&temporary, &destination)?;
-        Ok(())
-    })();
-    if result.is_err() {
-        let _ = fs::remove_file(&temporary);
-    }
-    result?;
-    Ok(destination)
-}
-
-fn validate_forge_client_mod(path: &Path, spec: &crate::DownloadSpec) -> Result<(), LaunchError> {
-    if !path.is_file() {
-        return Err(LaunchError::MissingForgeClientMod(path.to_path_buf()));
-    }
-    if !verify_file(path, spec)
-        .map_err(|_| LaunchError::InvalidForgeClientMod(path.to_path_buf()))?
-    {
-        return Err(LaunchError::InvalidForgeClientMod(path.to_path_buf()));
-    }
-
-    let file =
-        File::open(path).map_err(|_| LaunchError::InvalidForgeClientMod(path.to_path_buf()))?;
-    let mut archive = zip::ZipArchive::new(file)
-        .map_err(|_| LaunchError::InvalidForgeClientMod(path.to_path_buf()))?;
-    let mut manifest = String::new();
-    archive
-        .by_name("META-INF/MANIFEST.MF")
-        .map_err(|_| LaunchError::InvalidForgeClientMod(path.to_path_buf()))?
-        .read_to_string(&mut manifest)
-        .map_err(|_| LaunchError::InvalidForgeClientMod(path.to_path_buf()))?;
-    if manifest_has_key(&manifest, "FMLCorePlugin")
-        || manifest_has_key(&manifest, "FMLCorePluginContainsFMLMod")
-        || archive
-            .by_name("org/polydevs/opusmc/client/OpusClientMod.class")
-            .is_err()
-    {
-        return Err(LaunchError::InvalidForgeClientMod(path.to_path_buf()));
-    }
-    let mut metadata = String::new();
-    archive
-        .by_name("mcmod.info")
-        .map_err(|_| LaunchError::InvalidForgeClientMod(path.to_path_buf()))?
-        .read_to_string(&mut metadata)
-        .map_err(|_| LaunchError::InvalidForgeClientMod(path.to_path_buf()))?;
-    if !metadata.contains("\"modid\": \"opusclient\"") {
-        return Err(LaunchError::InvalidForgeClientMod(path.to_path_buf()));
-    }
-    Ok(())
-}
-
 fn manifest_has_attribute(manifest: &str, key: &str, expected: &str) -> bool {
     let target = format!("{key}: {expected}");
     manifest
@@ -811,18 +617,10 @@ fn manifest_has_attribute(manifest: &str, key: &str, expected: &str) -> bool {
         .any(|line| line.trim_end_matches('\r') == target)
 }
 
-fn manifest_has_key(manifest: &str, key: &str) -> bool {
-    let prefix = format!("{key}:");
-    manifest
-        .lines()
-        .any(|line| line.trim_end_matches('\r').starts_with(&prefix))
-}
-
 fn validate_managed_forge_mods(
     layout: &MinecraftLayout,
     optifine_jar: &Path,
     coremod_jar: &Path,
-    client_mod_jar: &Path,
 ) -> Result<(), LaunchError> {
     let expected_optifine =
         fs::canonicalize(optifine_jar).map_err(|source| LaunchError::CanonicalizeClasspath {
@@ -832,11 +630,6 @@ fn validate_managed_forge_mods(
     let expected_coremod =
         fs::canonicalize(coremod_jar).map_err(|source| LaunchError::CanonicalizeClasspath {
             path: coremod_jar.to_path_buf(),
-            source,
-        })?;
-    let expected_client_mod =
-        fs::canonicalize(client_mod_jar).map_err(|source| LaunchError::CanonicalizeClasspath {
-            path: client_mod_jar.to_path_buf(),
             source,
         })?;
     for entry in fs::read_dir(layout.mods_dir())? {
@@ -858,37 +651,27 @@ fn validate_managed_forge_mods(
                 path: candidate.clone(),
                 source,
             })?;
-        if canonical != expected_optifine
-            && canonical != expected_coremod
-            && canonical != expected_client_mod
-        {
+        if canonical != expected_optifine && canonical != expected_coremod {
             return Err(LaunchError::UnmanagedForgeMod(candidate));
         }
     }
     Ok(())
 }
 
-fn write_classpath_file(path: &Path, classpath: &[PathBuf]) -> Result<(), LaunchError> {
-    if classpath.is_empty() {
-        return Err(LaunchError::InvalidClasspath(
-            "game classpath is empty".to_owned(),
-        ));
-    }
-    let mut content = String::new();
-    for entry in classpath {
-        if !entry.is_file() {
-            return Err(LaunchError::MissingGameClasspathEntry(entry.clone()));
+/// The old typed client-mod name is a bounded migration target. Remove only
+/// that exact regular file before validating the two-artifact Forge set so an
+/// older launcher session cannot resurrect any in-game UI path.
+fn remove_retired_forge_client_mod(layout: &MinecraftLayout) -> Result<(), LaunchError> {
+    let path = layout.mods_dir().join("opus-client-legacy-1.8.9.jar");
+    match fs::symlink_metadata(&path) {
+        Ok(metadata) if metadata.file_type().is_file() => {
+            fs::remove_file(path)?;
+            Ok(())
         }
-        let text = path_text(entry)?;
-        if text.contains('\n') || text.contains('\r') {
-            return Err(LaunchError::InvalidClasspath(
-                "classpath entry contains a newline".to_owned(),
-            ));
-        }
-        content.push_str(text);
-        content.push('\n');
+        Ok(_) => Err(LaunchError::UnmanagedForgeMod(path)),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(LaunchError::Io(error)),
     }
-    create_private_file(path, content.as_bytes())
 }
 
 #[derive(Debug)]
@@ -920,6 +703,8 @@ pub fn launch_game_via_macos_app(
     let stdout_path = plan.log_directory.join("game.stdout.log");
     let stderr_path = plan.log_directory.join("game.stderr.log");
     let status_path = plan.log_directory.join("game.status");
+    let window_ready_path = plan.log_directory.join("game.window.ready");
+    let window_failure_path = plan.log_directory.join("game.window.failure");
     insert_jvm_argument_before_classpath(
         &mut plan.jvm_arguments,
         OsString::from(format!("-Dopus.game.statusFile={}", status_path.display())),
@@ -951,6 +736,8 @@ pub fn launch_game_via_macos_app(
                 &plan.jvm_arguments,
                 &plan.main_class,
                 &plan.game_arguments,
+                &window_ready_path,
+                &window_failure_path,
             ))
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -1046,6 +833,8 @@ fn macos_open_arguments(
     jvm_arguments: &[OsString],
     main_class: &str,
     game_arguments: &[OsString],
+    window_ready_path: &Path,
+    window_failure_path: &Path,
 ) -> Vec<OsString> {
     let mut working_directory_environment = OsString::from("OPUS_GAME_WORKDIR=");
     working_directory_environment.push(working_directory);
@@ -1059,6 +848,16 @@ fn macos_open_arguments(
         raw_stderr_path.as_os_str().to_owned(),
         OsString::from("--env"),
         working_directory_environment,
+        OsString::from("--env"),
+        OsString::from(format!(
+            "OPUS_GAME_WINDOW_READY_FILE={}",
+            window_ready_path.display()
+        )),
+        OsString::from("--env"),
+        OsString::from(format!(
+            "OPUS_GAME_WINDOW_FAILURE_FILE={}",
+            window_failure_path.display()
+        )),
         game_app.as_os_str().to_owned(),
         OsString::from("--args"),
         java_executable.as_os_str().to_owned(),
@@ -1070,14 +869,34 @@ fn macos_open_arguments(
 }
 
 fn wait_for_macos_game_lifecycle(status_path: &Path) -> Result<String, LaunchError> {
-    let startup_deadline = Instant::now() + Duration::from_secs(30);
+    let log_directory = status_path.parent().unwrap_or_else(|| Path::new("."));
+    let startup_deadline = Instant::now() + MACOS_GAME_WINDOW_STARTUP_TIMEOUT;
     loop {
         let game_status = fs::read_to_string(status_path)?.trim().to_owned();
         match game_status.as_str() {
-            "running" => return wait_for_macos_game_exit(status_path),
-            "exited" | "terminated" => return Ok(game_status),
+            "running" => {
+                wait_for_macos_game_window_ready(status_path, log_directory, startup_deadline)?;
+                check_macos_game_health(status_path, log_directory)?;
+                return wait_for_macos_game_exit(status_path, log_directory);
+            }
+            "exited" | "terminated" => {
+                ensure_macos_window_did_not_fail(log_directory)?;
+                if !macos_game_window_ready(log_directory).is_file() {
+                    return Err(LaunchError::MacosGameWindowNotReady);
+                }
+                return Ok(game_status);
+            }
             "failed" => return Err(LaunchError::MacosGameFailed),
             "starting" | "" => {
+                // The macOS stub can fail activation before Java publishes a
+                // terminal lifecycle state. Check both markers here so a
+                // locked console or missing window is reported immediately.
+                ensure_macos_window_did_not_fail(log_directory)?;
+                // A native JVM crash can happen before the bootstrap gets a
+                // chance to publish `failed`. Detect its fatal-error marker
+                // during startup so LaunchServices cannot leave us waiting
+                // for the startup timeout unnecessarily.
+                check_macos_jvm_crash_marker(log_directory)?;
                 if Instant::now() >= startup_deadline {
                     return Err(LaunchError::MacosGameStartupTimedOut);
                 }
@@ -1088,16 +907,147 @@ fn wait_for_macos_game_lifecycle(status_path: &Path) -> Result<String, LaunchErr
     }
 }
 
-fn wait_for_macos_game_exit(status_path: &Path) -> Result<String, LaunchError> {
+fn wait_for_macos_game_window_ready(
+    status_path: &Path,
+    log_directory: &Path,
+    deadline: Instant,
+) -> Result<(), LaunchError> {
+    let ready_path = macos_game_window_ready(log_directory);
+    loop {
+        if ready_path.is_file() {
+            return Ok(());
+        }
+        ensure_macos_window_did_not_fail(log_directory)?;
+        check_macos_jvm_crash_marker(log_directory)?;
+
+        let status = fs::read_to_string(status_path)?.trim().to_owned();
+        match status.as_str() {
+            "failed" => return Err(LaunchError::MacosGameFailed),
+            "exited" | "terminated" => return Err(LaunchError::MacosGameWindowNotReady),
+            "running" | "starting" | "" => {}
+            other => return Err(LaunchError::MacosGameStatusInvalid(other.to_owned())),
+        }
+
+        check_macos_game_health(status_path, log_directory)?;
+        if Instant::now() >= deadline {
+            return Err(LaunchError::MacosGameWindowStartupTimedOut);
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+}
+
+fn macos_game_window_ready(log_directory: &Path) -> PathBuf {
+    log_directory.join("game.window.ready")
+}
+
+fn macos_game_window_failure(log_directory: &Path) -> PathBuf {
+    log_directory.join("game.window.failure")
+}
+
+fn ensure_macos_window_did_not_fail(log_directory: &Path) -> Result<(), LaunchError> {
+    let failure = macos_game_window_failure(log_directory);
+    if failure.is_file() {
+        return Err(LaunchError::MacosGameWindowActivationFailed(failure));
+    }
+    Ok(())
+}
+
+fn wait_for_macos_game_exit(
+    status_path: &Path,
+    log_directory: &Path,
+) -> Result<String, LaunchError> {
     loop {
         let game_status = fs::read_to_string(status_path)?.trim().to_owned();
         match game_status.as_str() {
-            "exited" | "terminated" => return Ok(game_status),
+            "exited" | "terminated" => {
+                ensure_macos_window_did_not_fail(log_directory)?;
+                return Ok(game_status);
+            }
             "failed" => return Err(LaunchError::MacosGameFailed),
-            "running" | "starting" | "" => thread::sleep(Duration::from_millis(100)),
+            "running" => {
+                check_macos_game_health(status_path, log_directory)?;
+                thread::sleep(Duration::from_millis(100));
+            }
+            "starting" | "" => {
+                ensure_macos_window_did_not_fail(log_directory)?;
+                check_macos_jvm_crash_marker(log_directory)?;
+                thread::sleep(Duration::from_millis(100));
+            }
             other => return Err(LaunchError::MacosGameStatusInvalid(other.to_owned())),
         }
     }
+}
+
+/// The bootstrap writes the JVM pid immediately before publishing `running`.
+/// If that process disappears without updating the status file (for example a
+/// native AppKit crash), do not leave the launcher waiting forever.
+fn check_macos_game_health(status_path: &Path, log_directory: &Path) -> Result<(), LaunchError> {
+    check_macos_jvm_crash_marker(log_directory)?;
+
+    let pid_path = status_path.with_file_name("game.pid");
+    let raw_pid = match fs::read_to_string(&pid_path) {
+        Ok(raw_pid) => raw_pid,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return Err(LaunchError::MacosGamePidMissing(pid_path));
+        }
+        Err(error) => return Err(error.into()),
+    };
+    let pid = raw_pid
+        .trim()
+        .parse::<u32>()
+        .ok()
+        .filter(|pid| *pid > 1)
+        .ok_or_else(|| LaunchError::MacosGamePidInvalid(pid_path.clone()))?;
+    if !macos_game_process_is_alive(pid)? {
+        return Err(LaunchError::MacosGameProcessExited(pid));
+    }
+    Ok(())
+}
+
+fn check_macos_jvm_crash_marker(log_directory: &Path) -> Result<(), LaunchError> {
+    if let Some(path) = find_macos_jvm_crash_marker(log_directory)? {
+        return Err(LaunchError::MacosGameNativeCrash(path));
+    }
+    Ok(())
+}
+
+fn find_macos_jvm_crash_marker(log_directory: &Path) -> Result<Option<PathBuf>, LaunchError> {
+    let entries = match fs::read_dir(log_directory) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    for entry in entries {
+        let entry = entry?;
+        let name = entry.file_name();
+        let is_marker = name
+            .to_str()
+            .map(|name| name.starts_with("jvm_crash_") && name.ends_with(".log"))
+            .unwrap_or(false);
+        if is_marker && entry.path().is_file() {
+            return Ok(Some(entry.path()));
+        }
+    }
+    Ok(None)
+}
+
+#[cfg(unix)]
+fn macos_game_process_is_alive(pid: u32) -> Result<bool, LaunchError> {
+    let status = Command::new("/bin/kill")
+        .arg("-0")
+        .arg(pid.to_string())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()?;
+    Ok(status.success())
+}
+
+#[cfg(not(unix))]
+fn macos_game_process_is_alive(_pid: u32) -> Result<bool, LaunchError> {
+    // The macOS app lifecycle is only used on Unix. Keep non-Unix builds
+    // portable without pulling in a platform-specific process API.
+    Ok(true)
 }
 
 fn finalize_macos_game_logs(
@@ -1358,7 +1308,7 @@ fn restrict_private_file_permissions(_: &Path) -> Result<(), io::Error> {
 }
 
 fn validate_macos_game_app(game_app: &Path) -> Result<(), LaunchError> {
-    let executable = game_app.join("Contents/MacOS/Opus Client");
+    let executable = game_app.join("Contents/MacOS/Minecraft");
     if !game_app.is_dir() || !executable.is_file() {
         return Err(LaunchError::MacosGameAppMissing(game_app.to_path_buf()));
     }
@@ -1564,16 +1514,12 @@ pub enum LaunchError {
     DiagnosticsJson(#[source] serde_json::Error),
     #[error("invalid classpath: {0}")]
     InvalidClasspath(String),
-    #[error("bootstrap classpath is empty")]
-    EmptyBootstrapClasspath,
     #[error("bootstrap classpath does not contain opus-bootstrap-*.jar")]
     MissingBootstrapJar,
     #[error("bootstrap classpath entry does not exist: {path}", path = .0.display())]
     MissingBootstrapEntry(PathBuf),
     #[error("Forge launch requires the pinned Forge + OptiFine runtime, got {0}")]
     ForgeRuntimeRequired(String),
-    #[error("the Forge runtime must use the Forge bootstrap, not the legacy Opus bootstrap")]
-    ForgeBootstrapRequired,
     #[error("Forge launch requires an imported OptiFine 1.8.9 HD U M5 JAR")]
     OptiFineRequired,
     #[error("managed OptiFine failed integrity verification: {}", .0.display())]
@@ -1582,14 +1528,8 @@ pub enum LaunchError {
     MissingForgeCoremod(PathBuf),
     #[error("Opus Forge coremod is invalid: {}", .0.display())]
     InvalidForgeCoremod(PathBuf),
-    #[error("Opus Forge client mod is missing: {}", .0.display())]
-    MissingForgeClientMod(PathBuf),
-    #[error("Opus Forge client mod is invalid: {}", .0.display())]
-    InvalidForgeClientMod(PathBuf),
     #[error("unmanaged JAR or directory in isolated Forge mods directory: {}", .0.display())]
     UnmanagedForgeMod(PathBuf),
-    #[error("game classpath entry does not exist: {path}", path = .0.display())]
-    MissingGameClasspathEntry(PathBuf),
     #[error("failed to canonicalize classpath entry {path}", path = .path.display())]
     CanonicalizeClasspath {
         path: PathBuf,
@@ -1614,8 +1554,6 @@ pub enum LaunchError {
     InvalidAccessToken,
     #[error("unsupported authenticated user type: {0}")]
     InvalidUserType(String),
-    #[error("authenticated sessions must launch through Opus bootstrap")]
-    AuthenticatedDirectLaunchForbidden,
     #[error("game argument is not valid UTF-8")]
     NonUtf8Argument(OsString),
     #[error("too many game arguments: {0}")]
@@ -1644,9 +1582,23 @@ pub enum LaunchError {
     MacosGameAppLaunchFailed(ExitStatus),
     #[error("Minecraft reported a startup or runtime failure")]
     MacosGameFailed,
+    #[error("Minecraft native JVM crash marker was written: {0}")]
+    MacosGameNativeCrash(PathBuf),
+    #[error("Minecraft status is running but its process id file is missing: {0}")]
+    MacosGamePidMissing(PathBuf),
+    #[error("Minecraft status is running but its process id file is invalid: {0}")]
+    MacosGamePidInvalid(PathBuf),
+    #[error("Minecraft process {0} exited without updating its lifecycle status")]
+    MacosGameProcessExited(u32),
+    #[error("Minecraft window was not visible when the game lifecycle ended")]
+    MacosGameWindowNotReady,
+    #[error("Minecraft window did not become visible before the startup deadline")]
+    MacosGameWindowStartupTimedOut,
+    #[error("Minecraft window activation failed; see {0}")]
+    MacosGameWindowActivationFailed(PathBuf),
     #[error("Minecraft did not report a completed game lifecycle")]
     MacosGameDidNotExit,
-    #[error("Minecraft did not report that startup completed within 30 seconds")]
+    #[error("Minecraft did not report that startup completed within 90 seconds")]
     MacosGameStartupTimedOut,
     #[error("Minecraft reported an invalid game lifecycle state: {0}")]
     MacosGameStatusInvalid(String),
@@ -1674,7 +1626,6 @@ mod tests {
         options: LaunchOptions,
         bootstrap_jar: PathBuf,
         coremod_jar: PathBuf,
-        client_mod_jar: PathBuf,
         optifine_jar: PathBuf,
         contract: ForgeLaunchContract,
     }
@@ -1689,7 +1640,6 @@ mod tests {
             let forge_classpath = temporary.path().join("forge-runtime.jar");
             let vanilla_classpath = temporary.path().join("vanilla-client.jar");
             let coremod_jar = temporary.path().join("opus-runtime-legacy-1.8.9-0.0.1.jar");
-            let client_mod_jar = temporary.path().join("opus-client-legacy-1.8.9-0.0.1.jar");
             let native_archive = temporary.path().join("natives.jar");
             fs::write(&bootstrap_jar, b"bootstrap fixture").unwrap();
             fs::write(&forge_classpath, b"forge fixture").unwrap();
@@ -1711,25 +1661,12 @@ mod tests {
                     ("org/polydevs/opusmc/forge/OpusLoadingPlugin.class", b"coremod fixture"),
                 ],
             );
-            write_zip(
-                &client_mod_jar,
-                &[
-                    ("META-INF/MANIFEST.MF", b"Manifest-Version: 1.0\r\n\r\n"),
-                    ("mcmod.info", b"[{\"modid\": \"opusclient\"}]"),
-                    (
-                        "org/polydevs/opusmc/client/OpusClientMod.class",
-                        b"client mod fixture",
-                    ),
-                ],
-            );
-
             let optifine_jar = layout.optifine_mod();
             fs::create_dir_all(optifine_jar.parent().unwrap()).unwrap();
             fs::write(&optifine_jar, b"optifine fixture").unwrap();
             let contract = ForgeLaunchContract {
                 optifine: fixture_spec(&optifine_jar),
                 coremod: fixture_spec(&coremod_jar),
-                client_mod: fixture_spec(&client_mod_jar),
             };
             let minecraft = InstalledMinecraft {
                 version: fixture_minecraft_version(),
@@ -1763,7 +1700,6 @@ mod tests {
                 options: LaunchOptions::default(),
                 bootstrap_jar,
                 coremod_jar,
-                client_mod_jar,
                 optifine_jar,
                 contract,
             }
@@ -1773,7 +1709,6 @@ mod tests {
             LaunchMode::ForgeBootstrap {
                 bootstrap_jar: self.bootstrap_jar.clone(),
                 coremod_jar: self.coremod_jar.clone(),
-                client_mod_jar: self.client_mod_jar.clone(),
             }
         }
 
@@ -1869,24 +1804,10 @@ mod tests {
     fn macos_jvm_arguments_set_the_dock_name() {
         assert_eq!(
             platform_jvm_arguments(OperatingSystem::MacOs),
-            vec![OsString::from("-Xdock:name=Opus Client",)]
+            vec![OsString::from("-Xdock:name=Minecraft")]
         );
         assert!(platform_jvm_arguments(OperatingSystem::Windows).is_empty());
         assert!(platform_jvm_arguments(OperatingSystem::Linux).is_empty());
-    }
-
-    #[test]
-    fn sanitizes_window_titles_to_a_single_printable_line() {
-        assert_eq!(
-            sanitize_window_title("Opus Client - [OFFICIAL] zvwgvx"),
-            "Opus Client - [OFFICIAL] zvwgvx"
-        );
-        assert_eq!(
-            sanitize_window_title("  Opus\nClient\t- A  "),
-            "Opus Client - A"
-        );
-        assert_eq!(sanitize_window_title("\n\t  "), "");
-        assert_eq!(sanitize_window_title(&"x".repeat(500)).chars().count(), 120);
     }
 
     #[test]
@@ -1896,11 +1817,13 @@ mod tests {
             Path::new("/tmp/stdout"),
             Path::new("/tmp/stderr"),
             Path::new("/tmp/game"),
-            Path::new("/tmp/Opus Client.app"),
+            Path::new("/tmp/Minecraft.app"),
             Path::new("/tmp/java"),
             &[OsString::from("-Xmx2G")],
             "org.polydevs.opusmc.bootstrap.ForgeBootstrapMain",
             &[OsString::from("--opus-game-arguments-stdin")],
+            Path::new("/tmp/game.window.ready"),
+            Path::new("/tmp/game.window.failure"),
         );
 
         assert!(arguments.contains(&OsString::from("-n")));
@@ -1914,6 +1837,7 @@ mod tests {
         let temporary = tempfile::tempdir().unwrap();
         let status_path = temporary.path().join("game.status");
         fs::write(&status_path, "exited\n").unwrap();
+        fs::write(temporary.path().join("game.window.ready"), "ready\n").unwrap();
 
         assert_eq!(
             wait_for_macos_game_lifecycle(&status_path).unwrap(),
@@ -1930,6 +1854,69 @@ mod tests {
         assert!(matches!(
             wait_for_macos_game_lifecycle(&status_path),
             Err(LaunchError::MacosGameFailed)
+        ));
+    }
+
+    #[test]
+    fn macos_lifecycle_reports_window_activation_failure_during_startup() {
+        let temporary = tempfile::tempdir().unwrap();
+        let status_path = temporary.path().join("game.status");
+        let failure_path = temporary.path().join("game.window.failure");
+        fs::write(&status_path, "starting\n").unwrap();
+        fs::write(&failure_path, "macOS console is locked\n").unwrap();
+
+        assert!(matches!(
+            wait_for_macos_game_lifecycle(&status_path),
+            Err(LaunchError::MacosGameWindowActivationFailed(path)) if path == failure_path
+        ));
+    }
+
+    #[test]
+    fn macos_lifecycle_detects_a_native_jvm_crash_marker_while_running() {
+        let temporary = tempfile::tempdir().unwrap();
+        let status_path = temporary.path().join("game.status");
+        let crash_path = temporary.path().join("jvm_crash_1234.log");
+        fs::write(&status_path, "running\n").unwrap();
+        fs::write(&crash_path, "fatal native error\n").unwrap();
+
+        assert!(matches!(
+            wait_for_macos_game_lifecycle(&status_path),
+            Err(LaunchError::MacosGameNativeCrash(path)) if path == crash_path
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn macos_lifecycle_detects_a_dead_game_pid_while_running() {
+        let temporary = tempfile::tempdir().unwrap();
+        let status_path = temporary.path().join("game.status");
+        let pid_path = temporary.path().join("game.pid");
+        let mut process = Command::new("/bin/sh")
+            .arg("-c")
+            .arg("exit 0")
+            .spawn()
+            .unwrap();
+        let pid = process.id();
+        process.wait().unwrap();
+        fs::write(&status_path, "running\n").unwrap();
+        fs::write(&pid_path, format!("{pid}\n")).unwrap();
+
+        assert!(matches!(
+            wait_for_macos_game_lifecycle(&status_path),
+            Err(LaunchError::MacosGameProcessExited(actual)) if actual == pid
+        ));
+    }
+
+    #[test]
+    fn macos_lifecycle_rejects_running_status_without_a_pid() {
+        let temporary = tempfile::tempdir().unwrap();
+        let status_path = temporary.path().join("game.status");
+        fs::write(&status_path, "running\n").unwrap();
+
+        assert!(matches!(
+            wait_for_macos_game_lifecycle(&status_path),
+            Err(LaunchError::MacosGamePidMissing(path))
+                if path == temporary.path().join("game.pid")
         ));
     }
 
@@ -1969,8 +1956,9 @@ mod tests {
             host_arch: opus_platform::Architecture::Aarch64,
             game_arch: opus_platform::Architecture::X86_64,
         };
-        let mode = LaunchMode::Bootstrap {
-            classpath: vec![PathBuf::from("/private/bootstrap.jar")],
+        let mode = LaunchMode::ForgeBootstrap {
+            bootstrap_jar: PathBuf::from("/private/opus-bootstrap-0.0.1.jar"),
+            coremod_jar: PathBuf::from("/private/opus-runtime-legacy-1.8.9-0.0.1.jar"),
         };
 
         write_session_manifest(
@@ -1993,7 +1981,7 @@ mod tests {
         assert!(manifest.contains("\"packet_payloads\": \"not-recorded\""));
         assert!(manifest.contains("\"game_architecture\": \"x86_64\""));
         assert!(!manifest.contains("/private"));
-        assert!(!manifest.contains("bootstrap.jar"));
+        assert!(!manifest.contains("opus-bootstrap-0.0.1.jar"));
     }
 
     #[cfg(unix)]
@@ -2107,8 +2095,27 @@ mod tests {
     }
 
     #[test]
-    fn forge_bootstrap_plan_stages_both_opus_mods_and_keeps_them_out_of_system_classpath() {
+    fn forge_bootstrap_plan_stages_only_the_coremod_and_removes_the_retired_client_mod() {
         let fixture = ForgeFixture::new();
+        // A prior launcher may have left same-named, stale UI artifacts in an
+        // identity directory. The Core-Mod-only contract must remove them
+        // before Forge is allowed to discover the managed mod set.
+        fs::write(
+            fixture
+                .layout
+                .mods_dir()
+                .join("opus-runtime-legacy-1.8.9.jar"),
+            b"stale coremod artifact",
+        )
+        .unwrap();
+        fs::write(
+            fixture
+                .layout
+                .mods_dir()
+                .join("opus-client-legacy-1.8.9.jar"),
+            b"stale client artifact",
+        )
+        .unwrap();
         let mode = fixture.mode();
         let identity = GameIdentity::offline("ForgeFixture").unwrap();
         let plan = LaunchPlan::build_with_forge_contract(
@@ -2138,7 +2145,6 @@ mod tests {
         );
         assert!(!classpath.contains(&fs::canonicalize(&fixture.optifine_jar).unwrap()));
         assert!(!classpath.contains(&fs::canonicalize(&fixture.coremod_jar).unwrap()));
-        assert!(!classpath.contains(&fs::canonicalize(&fixture.client_mod_jar).unwrap()));
 
         let staged_coremod = fixture
             .layout
@@ -2150,22 +2156,15 @@ mod tests {
         );
         validate_forge_coremod(&staged_coremod, &fixture.contract.coremod).unwrap();
 
-        let staged_client_mod = fixture
-            .layout
-            .mods_dir()
-            .join("opus-client-legacy-1.8.9.jar");
-        assert_eq!(
-            fs::read(&staged_client_mod).unwrap(),
-            fs::read(&fixture.client_mod_jar).unwrap()
+        assert!(
+            !fixture
+                .layout
+                .mods_dir()
+                .join("opus-client-legacy-1.8.9.jar")
+                .exists()
         );
-        validate_forge_client_mod(&staged_client_mod, &fixture.contract.client_mod).unwrap();
-        validate_managed_forge_mods(
-            &fixture.layout,
-            &fixture.optifine_jar,
-            &staged_coremod,
-            &staged_client_mod,
-        )
-        .unwrap();
+        validate_managed_forge_mods(&fixture.layout, &fixture.optifine_jar, &staged_coremod)
+            .unwrap();
     }
 
     #[test]

@@ -15,14 +15,8 @@ default = []
 # and is additionally guarded by `debug_assertions` in the implementation, so
 # it is never registered in a release build.
 developer-test-profile = []
-# QA packages are a stricter flavor of the developer profile: they start in
-# offline mode and compile no account-authentication entrypoints. It is kept
-# separate from the in-memory developer simulation profile so QA can install
-# and launch its own managed Minecraft runtime.
-qa-edition = []
-# Uses the QA/offline runtime surface but resolves a third, isolated data root.
-# This feature exists only for the temporary in-game UI migration preview.
-ui-preview = ["qa-edition", "opus-engine/ui-preview-artifact"]
+# Quarantined historical source only. Supported build runners do not select it.
+ui-preview = ["opus-engine/ui-preview-artifact"]
 
 [[bin]]
 name = "opus-launcher"

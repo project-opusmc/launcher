@@ -6,17 +6,11 @@ use std::process::Command;
 use thiserror::Error;
 
 pub const OPUS_HOME_ENV: &str = "OPUS_HOME";
-/// Root override for the intentionally separate QA launcher installation.
-///
-/// This is deliberately distinct from `OPUS_HOME`: an offline QA build must
-/// never pick up a Premium install, account settings, or game directory just
-/// because the Premium override is present in the environment.
-pub const OPUS_QA_HOME_ENV: &str = "OPUS_QA_HOME";
 /// Root override for the disposable in-game UI preview edition.
 ///
-/// The UI preview is a third, fully isolated lane: it must not reuse either
-/// the Premium root or the ordinary offline QA root while Forge UI work
-/// is being proven against a real game session.
+/// The UI preview is a quarantined, fully isolated lane: it must not reuse
+/// the unified launcher's root while historical Forge UI work is being proven
+/// against a real game session.
 pub const OPUS_UI_PREVIEW_HOME_ENV: &str = "OPUS_UI_PREVIEW_HOME";
 pub const OPUS_JAVA_HOME_ENV: &str = "OPUS_JAVA_HOME";
 
@@ -185,45 +179,26 @@ impl OpusPaths {
         Self::from_root(root)
     }
 
-    /// Resolve the storage root for the offline QA edition.
-    ///
-    /// QA intentionally ignores `OPUS_HOME` and has its own opt-in override.
-    /// This prevents a QA build from reading or modifying the Premium
-    /// launcher's managed runtime, settings, logs, or credentials by mistake.
-    pub fn discover_qa() -> Result<Self, PlatformError> {
-        let root = if let Some(configured) = env::var_os(OPUS_QA_HOME_ENV) {
-            let root = PathBuf::from(configured);
-            if !root.is_absolute() {
-                return Err(PlatformError::InvalidRoot(root));
+    /// Location used by the retired QA package. This is migration-only:
+    /// production launcher code never launches from or writes runtime state to
+    /// this directory.
+    pub fn legacy_qa_root() -> Result<PathBuf, PlatformError> {
+        let platform = Platform::detect()?;
+        let base = directories::BaseDirs::new().ok_or(PlatformError::HomeDirectoryUnavailable)?;
+        Ok(match platform.os {
+            OperatingSystem::Windows => base.data_local_dir().join("OpusLauncherQA"),
+            OperatingSystem::MacOs | OperatingSystem::Linux => {
+                base.home_dir().join(".opus-launcher-qa")
             }
-            root
-        } else {
-            let platform = Platform::detect()?;
-            let base =
-                directories::BaseDirs::new().ok_or(PlatformError::HomeDirectoryUnavailable)?;
-            match platform.os {
-                OperatingSystem::Windows => base.data_local_dir().join("OpusLauncherQA"),
-                OperatingSystem::MacOs | OperatingSystem::Linux => {
-                    base.home_dir().join(".opus-launcher-qa")
-                }
-            }
-        };
-
-        // The override is useful for disposable QA runs, but it must not turn
-        // the QA edition into a reader/writer of Premium state. Compare with
-        // the Premium resolver, including its OPUS_HOME override, before any
-        // caller constructs a layout below this root.
-        let premium_root = Self::discover()?.root;
-        ensure_qa_root_isolated(&root, &premium_root)?;
-        Self::from_root(root)
+        })
     }
 
     /// Resolve the storage root for the isolated in-game UI preview edition.
     ///
-    /// This uses the same offline identity policy as QA, but it deliberately
-    /// owns neither QA's game cache nor its settings. Keeping the UI preview
-    /// separate lets us prove a normal Forge client mod without replacing the
-    /// user's QA installation.
+    /// This uses the same offline identity policy as the unified account
+    /// catalog, but it deliberately owns neither the launcher's game cache nor
+    /// its settings. Keeping the UI preview separate lets us prove historical
+    /// Forge UI work without replacing the user's launcher installation.
     pub fn discover_ui_preview() -> Result<Self, PlatformError> {
         let root = if let Some(configured) = env::var_os(OPUS_UI_PREVIEW_HOME_ENV) {
             let root = PathBuf::from(configured);
@@ -243,9 +218,8 @@ impl OpusPaths {
             }
         };
 
-        let premium_root = Self::discover()?.root;
-        let qa_root = Self::discover_qa()?.root;
-        ensure_ui_preview_root_isolated(&root, &premium_root, &qa_root)?;
+        let launcher_root = Self::discover()?.root;
+        ensure_ui_preview_root_isolated(&root, &launcher_root)?;
         Self::from_root(root)
     }
 
@@ -280,21 +254,11 @@ impl OpusPaths {
     }
 }
 
-fn ensure_qa_root_isolated(qa_root: &Path, premium_root: &Path) -> Result<(), PlatformError> {
-    if paths_overlap(qa_root, premium_root) {
-        return Err(PlatformError::QaRootConflictsWithPremium(
-            qa_root.to_path_buf(),
-        ));
-    }
-    Ok(())
-}
-
 fn ensure_ui_preview_root_isolated(
     preview_root: &Path,
-    premium_root: &Path,
-    qa_root: &Path,
+    launcher_root: &Path,
 ) -> Result<(), PlatformError> {
-    if paths_overlap(preview_root, premium_root) || paths_overlap(preview_root, qa_root) {
+    if paths_overlap(preview_root, launcher_root) {
         return Err(PlatformError::UiPreviewRootConflictsWithExistingEdition(
             preview_root.to_path_buf(),
         ));
@@ -401,9 +365,7 @@ pub enum PlatformError {
     HomeDirectoryUnavailable,
     #[error("invalid Opus root directory: {path}", path = .0.display())]
     InvalidRoot(PathBuf),
-    #[error("Opus QA data root must not overlap the Premium data root: {0}")]
-    QaRootConflictsWithPremium(PathBuf),
-    #[error("Opus UI Preview data root must not overlap the Premium or QA data root: {0}")]
+    #[error("Opus UI Preview data root must not overlap the unified launcher root: {0}")]
     UiPreviewRootConflictsWithExistingEdition(PathBuf),
     #[error("Java executable does not exist: {path}", path = .0.display())]
     JavaExecutableMissing(PathBuf),
@@ -453,23 +415,13 @@ mod tests {
     }
 
     #[test]
-    fn rejects_a_qa_root_that_overlaps_premium_storage() {
-        let temp = tempfile::tempdir().unwrap();
-        let root = temp.path().join("opus");
-        assert!(ensure_qa_root_isolated(&root, &root).is_err());
-        assert!(ensure_qa_root_isolated(&temp.path().join("qa"), &root).is_ok());
-    }
-
-    #[test]
     fn rejects_a_ui_preview_root_that_overlaps_existing_storage() {
         let temp = tempfile::tempdir().unwrap();
         let preview = temp.path().join("preview");
-        let premium = temp.path().join("premium");
-        let qa = temp.path().join("qa");
+        let launcher = temp.path().join("launcher");
 
-        assert!(ensure_ui_preview_root_isolated(&premium, &premium, &qa).is_err());
-        assert!(ensure_ui_preview_root_isolated(&qa, &premium, &qa).is_err());
-        assert!(ensure_ui_preview_root_isolated(&preview, &premium, &qa).is_ok());
+        assert!(ensure_ui_preview_root_isolated(&launcher, &launcher).is_err());
+        assert!(ensure_ui_preview_root_isolated(&preview, &launcher).is_ok());
     }
 
     #[test]

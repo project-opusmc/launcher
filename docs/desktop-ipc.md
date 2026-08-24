@@ -8,14 +8,14 @@ registered commands and two application events.
 
 | Build | Feature | Behavior |
 | --- | --- | --- |
-| Premium | none | Microsoft accounts and unofficial offline profiles |
-| QA | `qa-edition` | offline-only, isolated debug bundle |
-| UI Preview | `ui-preview` | QA behavior with a third isolated data root |
+| Unified launcher | none | Microsoft accounts and explicitly labeled unofficial offline profiles in one catalog |
+| Legacy preview | `ui-preview` | Quarantined source only; its build runner is disabled |
 | Developer test | `developer-test-profile` | debug-only in-memory simulation |
 
-QA, UI Preview, and developer-test features are rejected in release builds.
-Each flavor has its own `generate_handler!` list, so unavailable commands are
-not registered at runtime.
+The developer-test feature is rejected in release builds. The legacy preview
+feature remains quarantined source only and has no supported production build
+runner. The unified launcher registers both official and offline account
+commands in one IPC surface.
 
 ## Commands
 
@@ -34,9 +34,9 @@ Registered in every real-runtime build:
 | `remove_account` | remove one catalog entry and its credential when applicable |
 | `launch_game` | launch the selected identity in its isolated instance |
 
-Premium also registers `login_with_microsoft` and
-`cancel_microsoft_login`. QA registers `get_qa_profile` and `save_qa_profile`.
-The developer-test build adds its simulation commands.
+The unified launcher registers `login_with_microsoft`,
+`cancel_microsoft_login`, and `save_offline_profile`. The developer-test build
+adds its simulation commands.
 
 ## Events
 
@@ -78,7 +78,8 @@ The data root contains three independent versioned files:
 
 Writes use a same-directory partial file, `fsync`, and atomic rename. Account
 credentials are not stored in `accounts-v1.json`; each Microsoft refresh token
-is stored in the operating-system keychain under its Minecraft profile UUID.
+is stored in Opus's private local credential vault under its Minecraft profile
+UUID. The launcher does not call the operating-system keychain.
 
 ## Multi-Instance Launch
 
@@ -104,9 +105,9 @@ thread waits for completion, releases the account slot, and emits
 
 Tauri packages:
 
-- `bootstrap/` with the Runtime manifest, checksums, and three OPUS Runtime JARs;
-- `brand/opus-wordmark-transparent.png`;
-- `Opus Client.app`, the macOS LaunchServices stub.
+- `bootstrap/` with the Runtime manifest, checksums, bootstrap JAR, and Core
+  Mod JAR;
+- `Minecraft.app`, the macOS LaunchServices host stub.
 
 `scripts/stage-runtime-artifacts.mjs` validates the Runtime manifest and SHA-256
 contract before resources are staged. `desktop/src-tauri/build.rs` compiles the
@@ -119,7 +120,7 @@ The `main` window receives only `core:default` plus
 Tauri window close command; without it Tauri reports
 `Command plugin:window|close not allowed by ACL`.
 
-No filesystem, shell, or HTTP plugin is exposed to the frontend. Premium uses
+No filesystem, shell, or HTTP plugin is exposed to the frontend. The unified launcher uses
 a restrictive CSP allowing local Tauri IPC, local development WebSocket access,
 packaged assets, inline styles, and self-hosted scripts.
 
@@ -129,5 +130,6 @@ packaged assets, inline styles, and self-hosted scripts.
 2. Move blocking filesystem, network, and process work off the IPC thread.
 3. Return aggregate, non-secret values and add a serialization test when the
    payload could grow a sensitive field.
-4. Keep account credentials in Rust and the OS keychain.
+4. Keep account credentials in Rust and Opus's local credential vault; never
+   expose them to the frontend or reintroduce an OS keychain dependency.
 5. Add the narrowest Tauri capability only when a frontend API requires it.

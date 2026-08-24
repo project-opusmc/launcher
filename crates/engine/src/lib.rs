@@ -10,9 +10,9 @@ mod skin;
 
 pub use download::{DownloadOutcome, DownloadSpec, Downloader, verify_file};
 pub use forge::{
-    FORGE_CLIENT_MOD_SHA1, FORGE_CLIENT_MOD_SIZE, FORGE_COREMOD_SHA1, FORGE_COREMOD_SIZE,
-    FORGE_MAIN_CLASS, FORGE_OPTIFINE_FILE_NAME, FORGE_PROFILE_ID, FORGE_RUNTIME_ID, ForgeLibrary,
-    ForgeLockError, ForgeRuntimeLock, OptiFineLock,
+    FORGE_COREMOD_SHA1, FORGE_COREMOD_SIZE, FORGE_MAIN_CLASS, FORGE_OPTIFINE_FILE_NAME,
+    FORGE_PROFILE_ID, FORGE_RUNTIME_ID, ForgeLibrary, ForgeLockError, ForgeRuntimeLock,
+    OptiFineLock,
 };
 pub use install::{
     InstallPhase, InstallProgress, InstallReport, InstalledMinecraft, Installer, ManagedJava,

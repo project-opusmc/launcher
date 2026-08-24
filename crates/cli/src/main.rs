@@ -57,7 +57,7 @@ enum Command {
 enum AccountCommand {
     /// Sign in through Microsoft's browser/device flow and verify ownership.
     Login,
-    /// Report whether a refresh credential exists in the OS keychain.
+    /// Report whether a refresh credential exists in Opus's local vault.
     Status,
     /// Remove the stored Microsoft refresh credential.
     Logout,
@@ -90,7 +90,7 @@ fn launch(
     let platform = Platform::detect()?;
     if platform.os == OperatingSystem::MacOs && !dry_run {
         anyhow::bail!(
-            "CLI game launch is disabled on macOS. Use the packaged Opus Launcher.app, which starts managed Java through the bundled Opus Client game stub. --dry-run remains available for diagnostics."
+            "CLI game launch is disabled on macOS. Use the packaged Opus Launcher.app, which starts managed Java through the bundled Minecraft host. --dry-run remains available for diagnostics."
         );
     }
     let paths = OpusPaths::discover()?;
@@ -124,14 +124,23 @@ fn launch(
     };
 
     let artifacts = forge_bootstrap_artifacts(bootstrap_dir)?;
-    println!("mode: Opus Forge bootstrap + coremod + typed client mod");
+    println!("mode: Forge + OptiFine + Opus Core Mod");
     let mode = LaunchMode::ForgeBootstrap {
         bootstrap_jar: artifacts.bootstrap_jar,
         coremod_jar: artifacts.coremod_jar,
-        client_mod_jar: artifacts.client_mod_jar,
     };
+    // Keep CLI launches on the same identity-isolated game directory as the
+    // desktop launcher. A shared `game/mods` directory can contain artifacts
+    // from an older build and must never be part of the Forge discovery path.
+    let mut instance_paths = layout.paths.clone();
+    instance_paths.game = instance_paths
+        .root
+        .join("instances")
+        .join(&identity.uuid)
+        .join("game");
+    let instance_layout = MinecraftLayout::new(instance_paths);
     let plan = LaunchPlan::build(
-        &layout,
+        &instance_layout,
         platform,
         &report.minecraft,
         &report.java,
@@ -180,7 +189,7 @@ fn account(command: AccountCommand) -> Result<()> {
         }
         AccountCommand::Status => {
             if store.load()?.is_some() {
-                println!("A Microsoft refresh credential is stored in the OS keychain");
+                println!("A Microsoft refresh credential is stored in Opus's local vault");
             } else {
                 println!("No Microsoft account is stored");
             }
@@ -188,7 +197,7 @@ fn account(command: AccountCommand) -> Result<()> {
         }
         AccountCommand::Logout => {
             if store.delete()? {
-                println!("Microsoft credential removed from the OS keychain");
+                println!("Microsoft credential removed from Opus's local vault");
             } else {
                 println!("No Microsoft credential was stored");
             }
@@ -200,7 +209,6 @@ fn account(command: AccountCommand) -> Result<()> {
 struct ForgeBootstrapArtifacts {
     bootstrap_jar: PathBuf,
     coremod_jar: PathBuf,
-    client_mod_jar: PathBuf,
 }
 
 fn forge_bootstrap_artifacts(directory: &Path) -> Result<ForgeBootstrapArtifacts> {
@@ -213,7 +221,6 @@ fn forge_bootstrap_artifacts(directory: &Path) -> Result<ForgeBootstrapArtifacts
 
     let mut bootstrap_jar = None;
     let mut coremod_jar = None;
-    let mut client_mod_jar = None;
     for entry in std::fs::read_dir(directory)? {
         let path = entry?.path();
         if path.extension().and_then(|value| value.to_str()) != Some("jar") {
@@ -237,10 +244,6 @@ fn forge_bootstrap_artifacts(directory: &Path) -> Result<ForgeBootstrapArtifacts
             if coremod_jar.replace(path).is_some() {
                 anyhow::bail!("bootstrap directory contains multiple Forge coremod JARs");
             }
-        } else if name.starts_with("opus-client-legacy-1.8.9-") && name.ends_with(".jar") {
-            if client_mod_jar.replace(path).is_some() {
-                anyhow::bail!("bootstrap directory contains multiple Forge client-mod JARs");
-            }
         } else {
             anyhow::bail!("bootstrap directory contains unexpected JAR: {name}");
         }
@@ -249,8 +252,6 @@ fn forge_bootstrap_artifacts(directory: &Path) -> Result<ForgeBootstrapArtifacts
         bootstrap_jar: bootstrap_jar
             .ok_or_else(|| anyhow::anyhow!("Forge bootstrap JAR is missing"))?,
         coremod_jar: coremod_jar.ok_or_else(|| anyhow::anyhow!("Forge coremod JAR is missing"))?,
-        client_mod_jar: client_mod_jar
-            .ok_or_else(|| anyhow::anyhow!("Forge client-mod JAR is missing"))?,
     })
 }
 

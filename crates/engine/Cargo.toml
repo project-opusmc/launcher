@@ -6,8 +6,8 @@ rust-version.workspace = true
 license.workspace = true
 
 [features]
-# This exists only for the debug-only, isolated OPUS Client UI-preview
-# bundle. Production keeps the reviewed release artifact lock below.
+# Quarantined historical UI-preview source. No supported launcher runner or
+# production check selects this feature.
 ui-preview-artifact = []
 
 [dependencies]

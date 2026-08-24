@@ -14,7 +14,12 @@ opus_processes() {
     opus_cursor="$(ps -o ppid= -p "${opus_cursor}" | tr -d '[:space:]')"
   done
 
-  ps -axo pid=,command= | awk -v ignored="${opus_ignored_pids}" '
+  opus_launcher_root="${OPUS_HOME:-${HOME}/.opus-launcher}"
+  opus_preview_root="${OPUS_UI_PREVIEW_HOME:-${HOME}/.opus-launcher-ui-preview}"
+  ps -axo pid=,command= | awk \
+    -v ignored="${opus_ignored_pids}" \
+    -v launcher_status="-Dopus.game.statusFile=${opus_launcher_root}/" \
+    -v preview_status="-Dopus.game.statusFile=${opus_preview_root}/" '
     {
       line = $0
       sub(/^[[:space:]]*/, "", line)
@@ -25,8 +30,16 @@ opus_processes() {
       }
       command = line
       sub(/^[0-9]+[[:space:]]+/, "", command)
-      if (command ~ /\/Applications\/Opus Launcher( QA| Preview)?\.app\/Contents\/MacOS\/opus-launcher/ \
-          || command ~ /\/Applications\/Opus Client\.app\/Contents\/MacOS\/Opus Client/ \
+      if (command ~ /^awk([[:space:]]|$)/) {
+        next
+      }
+      executable = command
+      sub(/[[:space:]].*$/, "", executable)
+      if (executable ~ /^\/Applications\/Opus Launcher( Preview)?\.app\/Contents\/MacOS\/opus-launcher$/ \
+          || executable ~ /^\/Applications\/Opus( Launcher( Preview)?)?\.app\/Contents\/Resources\/Minecraft\.app\/Contents\/MacOS\/Minecraft$/ \
+          || executable == "/Applications/Minecraft.app/Contents/MacOS/Minecraft" \
+          || index(command, launcher_status) != 0 \
+          || index(command, preview_status) != 0 \
           || command ~ /opus\.ui\.preview\.control\.file=/ \
           || command ~ /\.opus-launcher-ui-preview\/game/) {
         print pid "\t" command

@@ -2,8 +2,9 @@
 
 All Microsoft/Minecraft identity code lives in `crates/auth/src/lib.rs`.
 The desktop backend calls it from `desktop/src-tauri/src/lib.rs`; the CLI calls
-it from `crates/cli/src/main.rs`. The QA build does not register Microsoft
-authentication commands and offline profiles do not access the keychain.
+it from `crates/cli/src/main.rs`. The unified launcher registers Microsoft
+authentication beside offline profiles; offline profiles never access the
+credential vault.
 
 ## Client ID
 
@@ -101,13 +102,21 @@ the CLI do.
 
 ## Credential storage
 
-`RefreshTokenStore` wraps one OS keychain entry per Microsoft/Minecraft profile:
+`RefreshTokenStore` is an Opus-owned local vault, not a macOS Keychain client:
 
-- service `org.polydevs.opusmc.launcher.microsoft.refresh-token`, with one
-  account entry per Minecraft profile UUID
-- `save` refuses an empty token
-- `load` maps `NoEntry` to `Ok(None)`
-- `delete` returns whether an entry existed
+- default root: `~/Library/Application Support/opus/auth` on macOS and
+  `~/.local/share/opus/auth` elsewhere;
+- `OPUS_AUTH_DIR` overrides the root for isolated tests and development lanes;
+- one `profile-<minecraft-uuid>.token` file is used per Minecraft profile;
+- the vault directory is `0700` and token files are `0600` on Unix;
+- writes use a synced sibling temp file followed by an atomic rename;
+- `save` refuses an empty token, `load` returns `None` for a missing/empty file,
+  and `delete` reports whether a file existed.
+
+The launcher never calls the operating-system keychain, so loading or refreshing
+an account cannot trigger a Keychain-unlock prompt. The trade-off is explicit:
+the refresh token is protected by the local account/file permissions rather
+than by a platform credential UI.
 
 **Only the refresh token is persisted.** The Minecraft access token exists in
 memory for the duration of a launch, is passed to the game through the stdin
@@ -146,6 +155,7 @@ the task frees it when it actually stops.
 - Do not log, serialize, or return response bodies from identity services.
 - Do not relax callback validation (path, state, host, single-parameter rules);
   each check has a test.
-- Do not add a second credential store or a file-backed token cache.
+- Do not add a second credential store or reintroduce an operating-system
+  keychain dependency. Keep all token files under the vault root.
 - New failure modes get a typed `AuthError` variant with a message that carries
   no secret material.

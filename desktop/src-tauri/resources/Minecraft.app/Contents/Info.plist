@@ -5,15 +5,15 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
 	<key>CFBundleDisplayName</key>
-	<string>Opus Client</string>
+	<string>Minecraft</string>
 	<key>CFBundleExecutable</key>
-	<string>Opus Client</string>
+	<string>Minecraft</string>
 	<key>CFBundleIdentifier</key>
-	<string>org.polydevs.opusmc.client.game</string>
+	<string>org.polydevs.opusmc.minecraft</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>Opus Client</string>
+	<string>Minecraft</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
