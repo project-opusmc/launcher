@@ -9,7 +9,7 @@ use crate::{
     safe_join, verify_file,
 };
 use fs2::FileExt;
-use opus_platform::{Architecture, JavaProbe, Platform};
+use opus_platform::{Architecture, JavaProbe, OPUS_JAVA_HOME_ENV, Platform};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::fs::{self, File, OpenOptions};
@@ -262,12 +262,50 @@ impl Installer {
             )));
         }
         let (java, java_counts) = self.load_cached_java(java_component, &state)?;
+        let java = self.apply_java_override(java)?;
 
         Ok(InstallReport {
             minecraft,
             java,
             downloaded_files: 0,
             cached_files: minecraft_counts.cached + java_counts.cached,
+        })
+    }
+
+    /// Select an explicitly configured Java 8 home for integration and
+    /// platform-compatibility testing while keeping the managed cache fully
+    /// verified. The override is accepted only when its probed major version
+    /// and architecture satisfy the same launch contract as managed Java.
+    fn apply_java_override(&self, managed: ManagedJava) -> Result<ManagedJava, InstallError> {
+        let Some(raw_home) = std::env::var_os(OPUS_JAVA_HOME_ENV) else {
+            return Ok(managed);
+        };
+
+        self.apply_java_home_override(managed, PathBuf::from(raw_home))
+    }
+
+    fn apply_java_home_override(
+        &self,
+        _managed: ManagedJava,
+        java_home: PathBuf,
+    ) -> Result<ManagedJava, InstallError> {
+        if !java_home.is_absolute() {
+            return Err(InstallError::InvalidJavaOverride(java_home));
+        }
+
+        let probe = JavaProbe::probe(&java_home, self.platform.os)?;
+        if probe.major_version != 8 || probe.architecture != self.platform.game_arch {
+            return Err(InstallError::IncompatibleManagedJava {
+                version: probe.raw_version,
+                architecture: probe.architecture,
+                expected_architecture: self.platform.game_arch,
+            });
+        }
+
+        Ok(ManagedJava {
+            version_name: format!("override:{}", probe.raw_version),
+            java_home,
+            executable: probe.executable,
         })
     }
 
@@ -1311,6 +1349,8 @@ pub enum InstallError {
         architecture: Architecture,
         expected_architecture: Architecture,
     },
+    #[error("OPUS_JAVA_HOME must be an absolute Java home: {}", .0.display())]
+    InvalidJavaOverride(PathBuf),
     #[error("cached installation state is missing at {}", .0.display())]
     CachedStateMissing(PathBuf),
     #[error("cached installation state is invalid: {0}")]
@@ -1430,6 +1470,31 @@ mod tests {
         state = valid_test_state();
         state.runtime_manifest.url = "https://microsoft.com/not-mojang.json".to_owned();
         assert!(installer.validate_install_state(&state).is_err());
+    }
+
+    #[test]
+    fn java_override_requires_an_absolute_home() {
+        let temp = tempfile::tempdir().unwrap();
+        let platform = Platform {
+            os: OperatingSystem::MacOs,
+            host_arch: Architecture::Aarch64,
+            game_arch: Architecture::X86_64,
+        };
+        let paths = OpusPaths::from_root(temp.path().join("opus")).unwrap();
+        let installer = Installer::new(MinecraftLayout::new(paths), platform).unwrap();
+        let managed = ManagedJava {
+            version_name: "managed".to_owned(),
+            java_home: PathBuf::from("/managed"),
+            executable: PathBuf::from("/managed/bin/java"),
+        };
+
+        let result = installer.apply_java_home_override(managed, PathBuf::from("relative/java"));
+
+        assert!(matches!(
+            result,
+            Err(InstallError::InvalidJavaOverride(path))
+                if path.as_path() == Path::new("relative/java")
+        ));
     }
 
     fn valid_test_state() -> InstallState {

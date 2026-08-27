@@ -1,7 +1,7 @@
 use opus_auth::{BrowserLoginCancellation, MicrosoftAuthenticator, RefreshTokenStore};
 use opus_engine::{
-    GameIdentity, InstallProgress, Installer, LaunchMode, LaunchOptions, LaunchPlan,
-    MinecraftLayout, launch_game as launch_direct_game, launch_game_via_macos_app,
+    ForgeUiArtifacts, GameIdentity, InstallProgress, Installer, LaunchMode, LaunchOptions,
+    LaunchPlan, MinecraftLayout, launch_game as launch_direct_game, launch_game_via_macos_app,
 };
 use opus_platform::{OperatingSystem, OpusPaths, Platform};
 use serde::{Deserialize, Serialize};
@@ -31,7 +31,9 @@ const SETTINGS_FILE: &str = "launcher-settings-v1.json";
 /// can migrate independently without risking launch settings.
 const UTILITY_SETTINGS_FILE: &str = "utility-settings-v1.json";
 const UTILITY_SETTINGS_SCHEMA_VERSION: u8 = 1;
+#[cfg(not(feature = "ui-preview"))]
 const LEGACY_QA_PROFILE_FILE: &str = "offline-profile-v1.json";
+#[cfg(not(feature = "ui-preview"))]
 const LEGACY_QA_MIGRATION_FILE: &str = ".legacy-qa-offline-profile-v1.migrated";
 /// Public identifier of Opus's Microsoft Entra application. Desktop clients are
 /// public OAuth clients, so this identifier is safe to distribute; refresh
@@ -492,6 +494,7 @@ struct AccountResult {
 
 /// Shape of the old QA-only profile file. It is read solely to move a saved
 /// offline username into the unified account catalog.
+#[cfg(not(feature = "ui-preview"))]
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct LegacyQaProfile {
@@ -573,6 +576,7 @@ struct PreparedGameLaunch {
 struct ForgeBootstrapArtifacts {
     bootstrap_jar: PathBuf,
     coremod_jar: PathBuf,
+    ui: ForgeUiArtifacts,
 }
 
 #[tauri::command]
@@ -1142,7 +1146,7 @@ fn utility_settings_path() -> Result<PathBuf, String> {
 fn launcher_paths() -> Result<OpusPaths, String> {
     #[cfg(feature = "ui-preview")]
     {
-        return OpusPaths::discover_ui_preview().map_err(display_error);
+        OpusPaths::discover_ui_preview().map_err(display_error)
     }
     #[cfg(not(feature = "ui-preview"))]
     {
@@ -1289,6 +1293,7 @@ fn write_utility_settings_atomic(path: &Path, settings: &UtilitySettings) -> Res
     write_json_atomic(path, settings)
 }
 
+#[cfg(not(feature = "ui-preview"))]
 fn migrate_legacy_qa_offline_profile(paths: &OpusPaths) -> Result<(), String> {
     let marker = paths.root.join(LEGACY_QA_MIGRATION_FILE);
     if marker.is_file() {
@@ -1381,6 +1386,7 @@ fn prepare_game_launch(
         &LaunchMode::ForgeBootstrap {
             bootstrap_jar: forge_artifacts.bootstrap_jar,
             coremod_jar: forge_artifacts.coremod_jar,
+            ui: forge_artifacts.ui,
         },
     )
     .map_err(display_error)?;
@@ -1578,6 +1584,11 @@ fn forge_bootstrap_artifacts(directory: &Path) -> Result<ForgeBootstrapArtifacts
 
     let mut bootstrap_jar = None;
     let mut coremod_jar = None;
+    let mut native_ui_jar = None;
+    let mut opusconfig_jar = None;
+    let mut elementa_jar = None;
+    let mut universalcraft_jar = None;
+    let mut lwjgl_macos_compat_jar = None;
     for entry in fs::read_dir(directory).map_err(display_error)? {
         let path = entry.map_err(display_error)?.path();
         if path.extension().and_then(|value| value.to_str()) != Some("jar") {
@@ -1608,6 +1619,31 @@ fn forge_bootstrap_artifacts(directory: &Path) -> Result<ForgeBootstrapArtifacts
                     "Opus bootstrap directory contains multiple Forge coremod JARs".to_owned(),
                 );
             }
+        } else if name == "opus-native-ui-1.8.9-0.1.0.jar" {
+            if native_ui_jar.replace(path).is_some() {
+                return Err("Opus bootstrap directory contains multiple native UI JARs".to_owned());
+            }
+        } else if name == "opus-oneconfig-1.8.9-forge-0.2.2-alpha228-full.jar" {
+            if opusconfig_jar.replace(path).is_some() {
+                return Err("Opus bootstrap directory contains multiple OpusConfig JARs".to_owned());
+            }
+        } else if name == "opus-elementa-762.jar" {
+            if elementa_jar.replace(path).is_some() {
+                return Err("Opus bootstrap directory contains multiple Elementa JARs".to_owned());
+            }
+        } else if name == "opus-universalcraft-1.8.9-forge-516.jar" {
+            if universalcraft_jar.replace(path).is_some() {
+                return Err(
+                    "Opus bootstrap directory contains multiple UniversalCraft JARs".to_owned(),
+                );
+            }
+        } else if name == "opus-lwjgl-macos-compat-2.9.2-nightly-20140822.jar" {
+            if lwjgl_macos_compat_jar.replace(path).is_some() {
+                return Err(
+                    "Opus bootstrap directory contains multiple LWJGL compatibility JARs"
+                        .to_owned(),
+                );
+            }
         } else {
             return Err(format!(
                 "Opus bootstrap directory contains an unexpected JAR: {name}. Reinstall Opus Launcher."
@@ -1621,6 +1657,21 @@ fn forge_bootstrap_artifacts(directory: &Path) -> Result<ForgeBootstrapArtifacts
         coremod_jar: coremod_jar.ok_or_else(|| {
             "Opus Forge coremod JAR is missing. Reinstall Opus Launcher.".to_owned()
         })?,
+        ui: ForgeUiArtifacts {
+            native_ui_jar: native_ui_jar.ok_or_else(|| {
+                "Opus native UI JAR is missing. Reinstall Opus Launcher.".to_owned()
+            })?,
+            opusconfig_jar: opusconfig_jar
+                .ok_or_else(|| "OpusConfig JAR is missing. Reinstall Opus Launcher.".to_owned())?,
+            elementa_jar: elementa_jar
+                .ok_or_else(|| "Elementa JAR is missing. Reinstall Opus Launcher.".to_owned())?,
+            universalcraft_jar: universalcraft_jar.ok_or_else(|| {
+                "UniversalCraft JAR is missing. Reinstall Opus Launcher.".to_owned()
+            })?,
+            lwjgl_macos_compat_jar: lwjgl_macos_compat_jar.ok_or_else(|| {
+                "LWJGL compatibility JAR is missing. Reinstall Opus Launcher.".to_owned()
+            })?,
+        },
     })
 }
 

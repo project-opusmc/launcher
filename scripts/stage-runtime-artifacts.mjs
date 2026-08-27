@@ -27,6 +27,11 @@ const checksums = JSON.parse(readFileSync(checksumsPath, "utf8"));
 const expectedRoles = new Set([
   "bootstrap",
   "runtime-legacy-1.8.9",
+  "lwjgl-macos-compat",
+  "native-ui",
+  "opusconfig",
+  "elementa",
+  "universalcraft",
 ]);
 
 if (

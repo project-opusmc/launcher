@@ -8,9 +8,10 @@ The initial Rust CLI can resolve and boot Minecraft 1.8.9. On macOS, Minecraft
 1.8.9 uses the legacy x86_64 Java 8 runtime and LWJGL 2. A raw child
 `bin/java` process is registered as `BackgroundOnly` on the supported macOS
 environment: it can render and play audio while owning no visible game window.
-`-XstartOnFirstThread` is a later Minecraft metadata trait and is not valid for
-this 1.8.9 launch path. A production client also needs a clear home for
-account, settings, installation state and launch progress.
+LWJGL 2 performs Minecraft window operations through AppKit, which requires the
+managed JVM to reserve its first thread for Cocoa. A production client also
+needs a clear home for account, settings, installation state and launch
+progress.
 
 ## Decision
 
@@ -37,7 +38,9 @@ account, settings, installation state and launch progress.
   x86_64 Java 8 child, activates its real game window, and forwards termination
   signals while preserving the Forge bootstrap stdin protocol. It uses only
   AppKit/CoreGraphics window activation; no Carbon process transform or JNI is
-  used, and `-XstartOnFirstThread` remains unsupported for 1.8.9.
+  used. The managed JVM launches with `-XstartOnFirstThread` so LWJGL's window
+  operations stay on AppKit's main thread. The stub uses `posix_spawn`, rather
+  than `fork()`, so Java does not inherit partially initialized AppKit state.
 - On Windows and Linux, the desktop app uses the same launch-plan protocol
   without macOS-specific JVM options.
 

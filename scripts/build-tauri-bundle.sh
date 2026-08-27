@@ -24,7 +24,7 @@ else
 fi
 
 cd "${opus_root}/desktop"
-tauri build --bundles app
+npm exec -- tauri build --bundles app
 
 bundle=""
 for target_root in "${target_roots[@]}"; do

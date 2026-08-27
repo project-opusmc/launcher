@@ -3,11 +3,14 @@
 #include <CoreGraphics/CoreGraphics.h>
 #include <fcntl.h>
 #include <signal.h>
+#include <spawn.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/wait.h>
 #include <unistd.h>
+
+extern char **environ;
 
 static volatile sig_atomic_t child_pid = -1;
 
@@ -61,6 +64,7 @@ static int activate_java_window(pid_t pid, int *child_status, int *child_reaped)
     if (child_reaped != NULL) {
         *child_reaped = 0;
     }
+    int activation_requested = 0;
     while (CFAbsoluteTimeGetCurrent() < deadline) {
         if (macos_console_is_locked()) {
             return ACTIVATION_CONSOLE_LOCKED;
@@ -88,18 +92,15 @@ static int activate_java_window(pid_t pid, int *child_status, int *child_reaped)
             return ACTIVATION_WAIT_FAILED;
         }
 
-        // The Java process is not considered onscreen until its first window
-        // is ordered. Activate it before scanning so the scan does not create
-        // a circular dependency on an already-visible window.
-        NSRunningApplication *application =
-            [NSRunningApplication runningApplicationWithProcessIdentifier:pid];
-        if (application != nil) {
-            [application activateWithOptions:
-                NSApplicationActivateAllWindows | NSApplicationActivateIgnoringOtherApps];
-        }
-
+        // Old Java 8/LWJGL can crash in MacOSXContextImplementation.setView if
+        // another process repeatedly activates it while AppKit is still
+        // constructing the first OpenGL window. Detect an owned window first,
+        // activate exactly once, then require that window to become onscreen.
+        CGWindowListOption window_options = activation_requested
+            ? kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements
+            : kCGWindowListOptionAll | kCGWindowListExcludeDesktopElements;
         CFArrayRef windows = CGWindowListCopyWindowInfo(
-            kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements,
+            window_options,
             kCGNullWindowID);
         int found = 0;
         if (windows != NULL) {
@@ -135,7 +136,16 @@ static int activate_java_window(pid_t pid, int *child_status, int *child_reaped)
             CFRelease(windows);
         }
         if (found) {
-            return ACTIVATION_OK;
+            if (activation_requested) {
+                return ACTIVATION_OK;
+            }
+            NSRunningApplication *application =
+                [NSRunningApplication runningApplicationWithProcessIdentifier:pid];
+            if (application != nil) {
+                [application activateWithOptions:
+                    NSApplicationActivateAllWindows | NSApplicationActivateIgnoringOtherApps];
+                activation_requested = 1;
+            }
         }
         usleep(50 * 1000);
     }
@@ -197,20 +207,25 @@ int main(int argc, char *argv[]) {
         return 73;
     }
 
-    pid_t pid = fork();
-    if (pid < 0) {
-        fprintf(stderr, "[OPUS/STUB] could not fork Java: %s\n", strerror(errno));
+    // Do not use fork() after LaunchServices/AppKit has initialized this
+    // process. Java's -XstartOnFirstThread path must initialize Cocoa cleanly,
+    // while forked children inherit AppKit/CoreFoundation state that can crash
+    // during LWJGL's first display-mode query. posix_spawn starts a fresh Java
+    // process without copying that state and keeps this foreground stub alive
+    // to activate and supervise the child's real game window.
+    pid_t pid = -1;
+    int spawn_result = posix_spawn(
+        &pid,
+        argv[java_index],
+        NULL,
+        NULL,
+        &argv[java_index],
+        environ);
+    if (spawn_result != 0) {
+        fprintf(stderr, "[OPUS/STUB] could not start Java: %s\n", strerror(spawn_result));
         return 127;
     }
-    if (pid == 0) {
-        execv(argv[java_index], &argv[java_index]);
-        fprintf(stderr, "[OPUS/STUB] could not start Java: %s\n", strerror(errno));
-        _exit(127);
-    }
 
-    // Keep this LaunchServices process alive while Java owns the game window.
-    // An immediate exec changes the foreground app identity to the Java bundle
-    // on macOS, leaving the newly-created game window behind the launcher.
     child_pid = (sig_atomic_t)pid;
     (void)signal(SIGTERM, forward_signal);
     (void)signal(SIGINT, forward_signal);

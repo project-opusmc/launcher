@@ -10,21 +10,25 @@ mod skin;
 
 pub use download::{DownloadOutcome, DownloadSpec, Downloader, verify_file};
 pub use forge::{
-    FORGE_COREMOD_SHA1, FORGE_COREMOD_SIZE, FORGE_MAIN_CLASS, FORGE_OPTIFINE_FILE_NAME,
-    FORGE_PROFILE_ID, FORGE_RUNTIME_ID, ForgeLibrary, ForgeLockError, ForgeRuntimeLock,
-    OptiFineLock,
+    FORGE_COREMOD_SHA1, FORGE_COREMOD_SIZE, FORGE_ELEMENTA_SHA1, FORGE_ELEMENTA_SIZE,
+    FORGE_LWJGL_MACOS_COMPAT_SHA1, FORGE_LWJGL_MACOS_COMPAT_SIZE, FORGE_LWJGL_MACOS_NATIVE_SHA1,
+    FORGE_LWJGL_MACOS_NATIVE_SIZE, FORGE_LWJGL_RESIZE_GUARD_FILE_NAME,
+    FORGE_LWJGL_RESIZE_GUARD_SHA1, FORGE_LWJGL_RESIZE_GUARD_SIZE, FORGE_MAIN_CLASS,
+    FORGE_NATIVE_UI_SHA1, FORGE_NATIVE_UI_SIZE, FORGE_OPTIFINE_FILE_NAME, FORGE_OPUSCONFIG_SHA1,
+    FORGE_OPUSCONFIG_SIZE, FORGE_PROFILE_ID, FORGE_RUNTIME_ID, FORGE_UNIVERSALCRAFT_SHA1,
+    FORGE_UNIVERSALCRAFT_SIZE, ForgeLibrary, ForgeLockError, ForgeRuntimeLock, OptiFineLock,
 };
 pub use install::{
     InstallPhase, InstallProgress, InstallReport, InstalledMinecraft, Installer, ManagedJava,
     NativeArchive,
 };
 pub use launch::{
-    GameIdentity, LaunchMode, LaunchOptions, LaunchPlan, LaunchResult, launch_game,
-    launch_game_via_macos_app,
+    ForgeUiArtifacts, GameIdentity, LaunchMode, LaunchOptions, LaunchPlan, LaunchResult,
+    launch_game, launch_game_via_macos_app,
 };
 pub use layout::{MinecraftLayout, safe_join};
 pub use model::*;
-pub use natives::extract_natives;
+pub use natives::{extract_natives, replace_native_from_archive};
 pub use rules::{RuleContext, library_is_allowed, native_classifier};
 pub use skin::{PlayerSkin, SkinModel, fetch_skin, skin_data_url};
 

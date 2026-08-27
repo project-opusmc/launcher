@@ -105,8 +105,9 @@ thread waits for completion, releases the account slot, and emits
 
 Tauri packages:
 
-- `bootstrap/` with the Runtime manifest, checksums, bootstrap JAR, and Core
-  Mod JAR;
+- `bootstrap/` with the Runtime manifest, checksums, bootstrap, Core Mod, sealed
+  LWJGL macOS compatibility, native UI, OpusConfig, Elementa, and UniversalCraft
+  JARs;
 - `Minecraft.app`, the macOS LaunchServices host stub.
 
 `scripts/stage-runtime-artifacts.mjs` validates the Runtime manifest and SHA-256

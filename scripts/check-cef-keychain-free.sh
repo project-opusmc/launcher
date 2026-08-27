@@ -2,9 +2,9 @@
 set -euo pipefail
 
 # Historical CEF-only gate. The canonical production path is now
-# Forge + OptiFine + OPUS Core Mod + vanilla Minecraft UI, so this script must
-# never start a helper, observe securityd, or exercise a credential store.
-echo "Retired CEF gate: disabled by the Core-Mod-first runtime contract; no helper was launched." >&2
+# Forge + OptiFine + the native Elementa/OpusConfig UI set, so this script must
+# never start a web helper, observe securityd, or exercise a credential store.
+echo "Retired CEF gate: disabled by the native-UI runtime contract; no helper was launched." >&2
 exit 78
 
 if [[ "$(uname -s)" != "Darwin" ]]; then

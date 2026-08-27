@@ -17,8 +17,8 @@
    OptiFine profile, creates an identity-isolated instance, and starts Forge
    through its managed Java runtime. Different identities may run concurrently;
    a duplicate launch for the same identity is rejected.
-7. Minecraft opens as the normal Forge 1.8.9 client: Singleplayer, Multiplayer,
-   Options and Quit remain vanilla UI.
+7. Minecraft opens as Forge 1.8.9 with the Elementa-powered OPUS title/pause
+   shell. Physical Right Shift opens or closes branded OpusConfig.
 
 ## Unified account catalog
 
@@ -26,7 +26,8 @@ One Opus Launcher bundle owns both Microsoft and offline identities. The
 offline path stores only a Minecraft-compatible username, derives its
 deterministic offline UUID, and never reads a Microsoft credential or opens the
 credential vault for that identity. It uses the same verified Forge bridge,
-Core Mod, and locally imported OptiFine contract as an official identity.
+Core Mod, native UI/OpusConfig set, and locally imported OptiFine contract as an
+official identity.
 
 Offline mode is not an identity or access-control system. Offline sessions
 must use operator-controlled `online-mode=false` servers with an appropriate

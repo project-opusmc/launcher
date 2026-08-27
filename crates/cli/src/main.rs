@@ -2,7 +2,8 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use opus_auth::{MICROSOFT_CLIENT_ID_ENV, MicrosoftAuthenticator, RefreshTokenStore};
 use opus_engine::{
-    GameIdentity, Installer, LaunchMode, LaunchOptions, LaunchPlan, MinecraftLayout, launch_game,
+    ForgeUiArtifacts, GameIdentity, Installer, LaunchMode, LaunchOptions, LaunchPlan,
+    MinecraftLayout, launch_game,
 };
 use opus_platform::{OperatingSystem, OpusPaths, Platform};
 use std::path::{Path, PathBuf};
@@ -124,10 +125,11 @@ fn launch(
     };
 
     let artifacts = forge_bootstrap_artifacts(bootstrap_dir)?;
-    println!("mode: Forge + OptiFine + Opus Core Mod");
+    println!("mode: Forge + OptiFine + Elementa shell + OpusConfig");
     let mode = LaunchMode::ForgeBootstrap {
         bootstrap_jar: artifacts.bootstrap_jar,
         coremod_jar: artifacts.coremod_jar,
+        ui: artifacts.ui,
     };
     // Keep CLI launches on the same identity-isolated game directory as the
     // desktop launcher. A shared `game/mods` directory can contain artifacts
@@ -209,6 +211,7 @@ fn account(command: AccountCommand) -> Result<()> {
 struct ForgeBootstrapArtifacts {
     bootstrap_jar: PathBuf,
     coremod_jar: PathBuf,
+    ui: ForgeUiArtifacts,
 }
 
 fn forge_bootstrap_artifacts(directory: &Path) -> Result<ForgeBootstrapArtifacts> {
@@ -221,6 +224,11 @@ fn forge_bootstrap_artifacts(directory: &Path) -> Result<ForgeBootstrapArtifacts
 
     let mut bootstrap_jar = None;
     let mut coremod_jar = None;
+    let mut native_ui_jar = None;
+    let mut opusconfig_jar = None;
+    let mut elementa_jar = None;
+    let mut universalcraft_jar = None;
+    let mut lwjgl_macos_compat_jar = None;
     for entry in std::fs::read_dir(directory)? {
         let path = entry?.path();
         if path.extension().and_then(|value| value.to_str()) != Some("jar") {
@@ -244,6 +252,26 @@ fn forge_bootstrap_artifacts(directory: &Path) -> Result<ForgeBootstrapArtifacts
             if coremod_jar.replace(path).is_some() {
                 anyhow::bail!("bootstrap directory contains multiple Forge coremod JARs");
             }
+        } else if name == "opus-native-ui-1.8.9-0.1.0.jar" {
+            if native_ui_jar.replace(path).is_some() {
+                anyhow::bail!("bootstrap directory contains multiple native UI JARs");
+            }
+        } else if name == "opus-oneconfig-1.8.9-forge-0.2.2-alpha228-full.jar" {
+            if opusconfig_jar.replace(path).is_some() {
+                anyhow::bail!("bootstrap directory contains multiple OpusConfig JARs");
+            }
+        } else if name == "opus-elementa-762.jar" {
+            if elementa_jar.replace(path).is_some() {
+                anyhow::bail!("bootstrap directory contains multiple Elementa JARs");
+            }
+        } else if name == "opus-universalcraft-1.8.9-forge-516.jar" {
+            if universalcraft_jar.replace(path).is_some() {
+                anyhow::bail!("bootstrap directory contains multiple UniversalCraft JARs");
+            }
+        } else if name == "opus-lwjgl-macos-compat-2.9.2-nightly-20140822.jar" {
+            if lwjgl_macos_compat_jar.replace(path).is_some() {
+                anyhow::bail!("bootstrap directory contains multiple LWJGL compatibility JARs");
+            }
         } else {
             anyhow::bail!("bootstrap directory contains unexpected JAR: {name}");
         }
@@ -252,6 +280,17 @@ fn forge_bootstrap_artifacts(directory: &Path) -> Result<ForgeBootstrapArtifacts
         bootstrap_jar: bootstrap_jar
             .ok_or_else(|| anyhow::anyhow!("Forge bootstrap JAR is missing"))?,
         coremod_jar: coremod_jar.ok_or_else(|| anyhow::anyhow!("Forge coremod JAR is missing"))?,
+        ui: ForgeUiArtifacts {
+            native_ui_jar: native_ui_jar
+                .ok_or_else(|| anyhow::anyhow!("native UI JAR is missing"))?,
+            opusconfig_jar: opusconfig_jar
+                .ok_or_else(|| anyhow::anyhow!("OpusConfig JAR is missing"))?,
+            elementa_jar: elementa_jar.ok_or_else(|| anyhow::anyhow!("Elementa JAR is missing"))?,
+            universalcraft_jar: universalcraft_jar
+                .ok_or_else(|| anyhow::anyhow!("UniversalCraft JAR is missing"))?,
+            lwjgl_macos_compat_jar: lwjgl_macos_compat_jar
+                .ok_or_else(|| anyhow::anyhow!("LWJGL compatibility JAR is missing"))?,
+        },
     })
 }
 

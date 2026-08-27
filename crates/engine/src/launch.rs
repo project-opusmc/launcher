@@ -1,10 +1,16 @@
 use crate::{
-    FORGE_COREMOD_SHA1, FORGE_COREMOD_SIZE, FORGE_RUNTIME_ID, ForgeRuntimeLock, InstalledMinecraft,
-    ManagedJava, MinecraftLayout, extract_natives, verify_file,
+    FORGE_COREMOD_SHA1, FORGE_COREMOD_SIZE, FORGE_ELEMENTA_SHA1, FORGE_ELEMENTA_SIZE,
+    FORGE_LWJGL_MACOS_COMPAT_SHA1, FORGE_LWJGL_MACOS_COMPAT_SIZE, FORGE_LWJGL_MACOS_NATIVE_SHA1,
+    FORGE_LWJGL_MACOS_NATIVE_SIZE, FORGE_LWJGL_RESIZE_GUARD_FILE_NAME,
+    FORGE_LWJGL_RESIZE_GUARD_SHA1, FORGE_LWJGL_RESIZE_GUARD_SIZE, FORGE_NATIVE_UI_SHA1,
+    FORGE_NATIVE_UI_SIZE, FORGE_OPUSCONFIG_SHA1, FORGE_OPUSCONFIG_SIZE, FORGE_RUNTIME_ID,
+    FORGE_UNIVERSALCRAFT_SHA1, FORGE_UNIVERSALCRAFT_SIZE, ForgeRuntimeLock, InstalledMinecraft,
+    ManagedJava, MinecraftLayout, extract_natives, replace_native_from_archive, verify_file,
 };
 use md5::{Digest, Md5};
 use opus_platform::{OperatingSystem, Platform};
 use serde::Serialize;
+use sha1::Sha1;
 use std::ffi::{OsStr, OsString};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufRead, BufReader, Read, Write};
@@ -18,6 +24,7 @@ const SESSION_MANIFEST_SCHEMA_VERSION: u32 = 1;
 const DIAGNOSTICS_SCHEMA_VERSION: u32 = 1;
 const LAUNCHER_SUMMARY_SCHEMA_VERSION: u32 = 1;
 const MACOS_GAME_WINDOW_STARTUP_TIMEOUT: Duration = Duration::from_secs(90);
+const LWJGL_MACOS_JAVA_ARTIFACT_FILE_NAME: &str = "lwjgl-2.9.2-nightly-20140822.jar";
 
 #[derive(Clone)]
 pub struct GameIdentity {
@@ -96,13 +103,24 @@ impl Default for LaunchOptions {
 }
 
 #[derive(Debug, Clone)]
+pub struct ForgeUiArtifacts {
+    pub native_ui_jar: PathBuf,
+    pub opusconfig_jar: PathBuf,
+    pub elementa_jar: PathBuf,
+    pub universalcraft_jar: PathBuf,
+    pub lwjgl_macos_compat_jar: PathBuf,
+}
+
+#[derive(Debug, Clone)]
 pub enum LaunchMode {
     /// Forge owns Minecraft's class loader. The small Opus bootstrap keeps
-    /// identity arguments off the process command line, while the Opus Core Mod
-    /// is staged into the isolated Forge `mods` directory.
+    /// identity arguments off the process command line, while the Core Mod and
+    /// locked Elementa/OpusConfig UI set are staged into the isolated Forge
+    /// `mods` directory.
     ForgeBootstrap {
         bootstrap_jar: PathBuf,
         coremod_jar: PathBuf,
+        ui: ForgeUiArtifacts,
     },
 }
 
@@ -126,6 +144,11 @@ pub struct LaunchPlan {
 struct ForgeLaunchContract {
     optifine: crate::DownloadSpec,
     coremod: crate::DownloadSpec,
+    native_ui: crate::DownloadSpec,
+    opusconfig: crate::DownloadSpec,
+    elementa: crate::DownloadSpec,
+    universalcraft: crate::DownloadSpec,
+    lwjgl_macos_compat: crate::DownloadSpec,
 }
 
 struct LaunchBuildRequest<'a> {
@@ -150,6 +173,11 @@ impl ForgeLaunchContract {
                 size: Some(lock.optifine.size),
             },
             coremod: forge_coremod_spec(),
+            native_ui: forge_native_ui_spec(),
+            opusconfig: forge_opusconfig_spec(),
+            elementa: forge_elementa_spec(),
+            universalcraft: forge_universalcraft_spec(),
+            lwjgl_macos_compat: forge_lwjgl_macos_compat_spec(),
         })
     }
 }
@@ -289,6 +317,9 @@ impl LaunchPlan {
             prefixed_path_argument("-Dorg.lwjgl.librarypath=", &natives_directory),
             prefixed_path_argument("-Dnet.java.games.input.librarypath=", &natives_directory),
             prefixed_path_argument("-Dopus.diagnostics.file=", &diagnostics_path),
+            OsString::from(format!("-Dopus.native.ui.session={session_id}")),
+            OsString::from("-Dopus.native.ui.enabled=true"),
+            OsString::from("-Dopus.native.ui.requireOptifine=true"),
             prefixed_path_argument("-Xloggc:", &gc_log_path),
             OsString::from("-XX:+PrintGCDetails"),
             OsString::from("-XX:+PrintGCDateStamps"),
@@ -333,6 +364,7 @@ impl LaunchPlan {
         let LaunchMode::ForgeBootstrap {
             bootstrap_jar,
             coremod_jar,
+            ui,
         } = mode;
         let pinned_contract = if forge_contract.is_none() {
             Some(ForgeLaunchContract::pinned()?)
@@ -353,13 +385,84 @@ impl LaunchPlan {
             .ok_or(LaunchError::OptiFineRequired)?;
         let staged_optifine = stage_forge_optifine(layout, optifine_jar, &contract.optifine)?;
         let staged_coremod = stage_forge_coremod(layout, coremod_jar, &contract.coremod)?;
+        let staged_native_ui = stage_forge_ui_artifact(
+            layout,
+            &ui.native_ui_jar,
+            &contract.native_ui,
+            "opus-native-ui-1.8.9-0.1.0.jar",
+        )?;
+        let staged_opusconfig = stage_forge_ui_artifact(
+            layout,
+            &ui.opusconfig_jar,
+            &contract.opusconfig,
+            "opus-oneconfig-1.8.9-forge-0.2.2-alpha228-full.jar",
+        )?;
+        let staged_elementa = stage_forge_ui_artifact(
+            layout,
+            &ui.elementa_jar,
+            &contract.elementa,
+            "opus-elementa-762.jar",
+        )?;
+        let staged_universalcraft = stage_forge_ui_artifact(
+            layout,
+            &ui.universalcraft_jar,
+            &contract.universalcraft,
+            "opus-universalcraft-1.8.9-forge-516.jar",
+        )?;
+        let lwjgl_macos_compat = if platform.os == OperatingSystem::MacOs {
+            validate_forge_lwjgl_compat_artifact(
+                &ui.lwjgl_macos_compat_jar,
+                &contract.lwjgl_macos_compat,
+            )?;
+            replace_native_from_archive(
+                &ui.lwjgl_macos_compat_jar,
+                "liblwjgl.dylib",
+                &natives_directory.join("liblwjgl.dylib"),
+                FORGE_LWJGL_MACOS_NATIVE_SHA1,
+                FORGE_LWJGL_MACOS_NATIVE_SIZE,
+            )?;
+            replace_native_from_archive(
+                &ui.lwjgl_macos_compat_jar,
+                FORGE_LWJGL_RESIZE_GUARD_FILE_NAME,
+                &natives_directory.join(FORGE_LWJGL_RESIZE_GUARD_FILE_NAME),
+                FORGE_LWJGL_RESIZE_GUARD_SHA1,
+                FORGE_LWJGL_RESIZE_GUARD_SIZE,
+            )?;
+            Some(
+                canonicalize_classpath(std::slice::from_ref(&ui.lwjgl_macos_compat_jar))?[0]
+                    .clone(),
+            )
+        } else {
+            None
+        };
         remove_retired_forge_client_mod(layout)?;
-        validate_managed_forge_mods(layout, &staged_optifine, &staged_coremod)?;
+        validate_managed_forge_mods(
+            layout,
+            &[
+                staged_optifine.as_path(),
+                staged_coremod.as_path(),
+                staged_native_ui.as_path(),
+                staged_opusconfig.as_path(),
+                staged_elementa.as_path(),
+                staged_universalcraft.as_path(),
+            ],
+        )?;
 
         let bootstrap = canonicalize_single_bootstrap_jar(bootstrap_jar)?;
-        let game_classpath = canonicalize_classpath(&minecraft.classpath)?;
-        let mut system_classpath = Vec::with_capacity(game_classpath.len() + 1);
+        let mut game_classpath = canonicalize_classpath(&minecraft.classpath)?;
+        if platform.os == OperatingSystem::MacOs {
+            // The verified compatibility JAR is the complete LWJGL 2 Java
+            // replacement on macOS. Keeping Mojang's original Java JAR in
+            // LaunchWrapper's URL list would let its sealed packages win
+            // before OneConfig reopens the org.lwjgl loader exception.
+            game_classpath.retain(|entry| !is_pinned_lwjgl_macos_java_artifact(entry));
+        }
+        let mut system_classpath = Vec::with_capacity(game_classpath.len() + 2);
         system_classpath.push(bootstrap);
+        if let Some(compatibility_jar) = lwjgl_macos_compat {
+            jvm_arguments.push(OsString::from("-Dopus.lwjgl.macos.compat=true"));
+            system_classpath.push(compatibility_jar);
+        }
         system_classpath.extend(game_classpath);
         let game_arguments = vec![OsString::from("--opus-game-arguments-stdin")];
         let stdin_payload = Some(encode_game_arguments(&vanilla_arguments)?);
@@ -462,9 +565,10 @@ fn launch_mode_name(mode: &LaunchMode) -> &'static str {
 fn platform_jvm_arguments(os: OperatingSystem) -> Vec<OsString> {
     match os {
         // Java 8u74's AWT/AppKit bridge crashes on this macOS host when
-        // `-XstartOnFirstThread` is supplied. LWJGL still initializes its
-        // window on the JVM's normal launch thread, so keep only the stock
-        // Minecraft dock label here.
+        // `-XstartOnFirstThread` is supplied. The compatibility LWJGL
+        // implementation keeps display work on its normal game/render path;
+        // native Cocoa resize notifications no longer update the GL context
+        // asynchronously, so the flag is not needed here.
         OperatingSystem::MacOs => vec![OsString::from("-Xdock:name=Minecraft")],
         OperatingSystem::Windows | OperatingSystem::Linux => Vec::new(),
     }
@@ -480,6 +584,12 @@ fn canonicalize_classpath(classpath: &[PathBuf]) -> Result<Vec<PathBuf>, LaunchE
             })
         })
         .collect()
+}
+
+fn is_pinned_lwjgl_macos_java_artifact(path: &Path) -> bool {
+    path.file_name()
+        .and_then(OsStr::to_str)
+        .is_some_and(|name| name == LWJGL_MACOS_JAVA_ARTIFACT_FILE_NAME)
 }
 
 fn canonicalize_single_bootstrap_jar(path: &Path) -> Result<PathBuf, LaunchError> {
@@ -581,6 +691,230 @@ fn forge_coremod_spec() -> crate::DownloadSpec {
     }
 }
 
+fn forge_native_ui_spec() -> crate::DownloadSpec {
+    crate::DownloadSpec {
+        url: "https://opus.invalid/release/opus-native-ui-1.8.9-0.1.0.jar".to_owned(),
+        sha1: FORGE_NATIVE_UI_SHA1.to_owned(),
+        size: Some(FORGE_NATIVE_UI_SIZE),
+    }
+}
+
+fn forge_opusconfig_spec() -> crate::DownloadSpec {
+    crate::DownloadSpec {
+        url: "https://opus.invalid/release/opus-oneconfig-1.8.9-forge-0.2.2-alpha228-full.jar"
+            .to_owned(),
+        sha1: FORGE_OPUSCONFIG_SHA1.to_owned(),
+        size: Some(FORGE_OPUSCONFIG_SIZE),
+    }
+}
+
+fn forge_elementa_spec() -> crate::DownloadSpec {
+    crate::DownloadSpec {
+        url: "https://opus.invalid/release/opus-elementa-762.jar".to_owned(),
+        sha1: FORGE_ELEMENTA_SHA1.to_owned(),
+        size: Some(FORGE_ELEMENTA_SIZE),
+    }
+}
+
+fn forge_universalcraft_spec() -> crate::DownloadSpec {
+    crate::DownloadSpec {
+        url: "https://opus.invalid/release/opus-universalcraft-1.8.9-forge-516.jar".to_owned(),
+        sha1: FORGE_UNIVERSALCRAFT_SHA1.to_owned(),
+        size: Some(FORGE_UNIVERSALCRAFT_SIZE),
+    }
+}
+
+fn forge_lwjgl_macos_compat_spec() -> crate::DownloadSpec {
+    crate::DownloadSpec {
+        url: "https://opus.invalid/release/opus-lwjgl-macos-compat-2.9.2-nightly-20140822.jar"
+            .to_owned(),
+        sha1: FORGE_LWJGL_MACOS_COMPAT_SHA1.to_owned(),
+        size: Some(FORGE_LWJGL_MACOS_COMPAT_SIZE),
+    }
+}
+
+fn stage_forge_ui_artifact(
+    layout: &MinecraftLayout,
+    source: &Path,
+    spec: &crate::DownloadSpec,
+    file_name: &str,
+) -> Result<PathBuf, LaunchError> {
+    validate_forge_ui_artifact(source, spec)?;
+    let mods_directory = layout.mods_dir();
+    fs::create_dir_all(&mods_directory)?;
+    let destination = mods_directory.join(file_name);
+    let temporary = mods_directory.join(format!(".{file_name}.part-{}", std::process::id()));
+    if temporary.exists() {
+        fs::remove_file(&temporary)?;
+    }
+    let result = (|| -> Result<(), LaunchError> {
+        fs::copy(source, &temporary)?;
+        validate_forge_ui_artifact(&temporary, spec)?;
+        #[cfg(windows)]
+        if destination.exists() {
+            fs::remove_file(&destination)?;
+        }
+        fs::rename(&temporary, &destination)?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    result?;
+    Ok(destination)
+}
+
+fn validate_forge_ui_artifact(path: &Path, spec: &crate::DownloadSpec) -> Result<(), LaunchError> {
+    if !path.is_file() {
+        return Err(LaunchError::MissingForgeUiArtifact(path.to_path_buf()));
+    }
+    if !verify_file(path, spec)
+        .map_err(|_| LaunchError::InvalidForgeUiArtifact(path.to_path_buf()))?
+    {
+        return Err(LaunchError::InvalidForgeUiArtifact(path.to_path_buf()));
+    }
+    let file =
+        File::open(path).map_err(|_| LaunchError::InvalidForgeUiArtifact(path.to_path_buf()))?;
+    zip::ZipArchive::new(file)
+        .map(|_| ())
+        .map_err(|_| LaunchError::InvalidForgeUiArtifact(path.to_path_buf()))
+}
+
+fn validate_forge_lwjgl_compat_artifact(
+    path: &Path,
+    spec: &crate::DownloadSpec,
+) -> Result<(), LaunchError> {
+    if !path.is_file() {
+        return Err(LaunchError::MissingLwjglMacosCompat(path.to_path_buf()));
+    }
+    if !verify_file(path, spec)
+        .map_err(|_| LaunchError::InvalidLwjglMacosCompat(path.to_path_buf()))?
+    {
+        return Err(LaunchError::InvalidLwjglMacosCompat(path.to_path_buf()));
+    }
+    let file =
+        File::open(path).map_err(|_| LaunchError::InvalidLwjglMacosCompat(path.to_path_buf()))?;
+    let mut archive = zip::ZipArchive::new(file)
+        .map_err(|_| LaunchError::InvalidLwjglMacosCompat(path.to_path_buf()))?;
+    let mut manifest_bytes = Vec::new();
+    {
+        let mut manifest = archive
+            .by_name("META-INF/MANIFEST.MF")
+            .map_err(|_| LaunchError::InvalidLwjglMacosCompat(path.to_path_buf()))?;
+        manifest
+            .read_to_end(&mut manifest_bytes)
+            .map_err(|_| LaunchError::InvalidLwjglMacosCompat(path.to_path_buf()))?;
+    }
+    let manifest_text = String::from_utf8(manifest_bytes)
+        .map_err(|_| LaunchError::InvalidLwjglMacosCompat(path.to_path_buf()))?;
+    if !manifest_text
+        .lines()
+        .any(|line| line.trim() == "Sealed: true")
+    {
+        return Err(LaunchError::InvalidLwjglMacosCompat(path.to_path_buf()));
+    }
+    for required in [
+        "org/lwjgl/MacOSXSysImplementation.class",
+        "org/lwjgl/J2SESysImplementation.class",
+        "org/lwjgl/DefaultSysImplementation.class",
+        "org/lwjgl/SysImplementation.class",
+        "org/lwjgl/opengl/MacOSXDisplay.class",
+        "org/lwjgl/opengl/MacOSXCanvasPeerInfo.class",
+        "org/lwjgl/opengl/MacOSXCanvasPeerInfo$1.class",
+        "org/lwjgl/opengl/MacOSXDisplayPeerInfo.class",
+    ] {
+        if archive.by_name(required).is_err() {
+            return Err(LaunchError::InvalidLwjglMacosCompat(path.to_path_buf()));
+        }
+    }
+    let native_bytes = {
+        let mut native = archive
+            .by_name("liblwjgl.dylib")
+            .map_err(|_| LaunchError::InvalidLwjglMacosCompat(path.to_path_buf()))?;
+        let mut bytes = Vec::new();
+        native
+            .read_to_end(&mut bytes)
+            .map_err(|_| LaunchError::InvalidLwjglMacosCompat(path.to_path_buf()))?;
+        bytes
+    };
+    let native_sha1 = format!("{:x}", Sha1::digest(&native_bytes));
+    let mach_o = native_bytes.starts_with(&[0xca, 0xfe, 0xba, 0xbe])
+        || native_bytes.starts_with(&[0xcf, 0xfa, 0xed, 0xfe]);
+    if native_bytes.len() as u64 != FORGE_LWJGL_MACOS_NATIVE_SIZE
+        || !native_sha1.eq_ignore_ascii_case(FORGE_LWJGL_MACOS_NATIVE_SHA1)
+        || !mach_o
+    {
+        return Err(LaunchError::InvalidLwjglMacosCompat(path.to_path_buf()));
+    }
+    let replacement_bytes = {
+        let mut replacement = archive
+            .by_name("org/lwjgl/MacOSXSysImplementation.class")
+            .map_err(|_| LaunchError::InvalidLwjglMacosCompat(path.to_path_buf()))?;
+        let mut bytes = Vec::new();
+        replacement
+            .read_to_end(&mut bytes)
+            .map_err(|_| LaunchError::InvalidLwjglMacosCompat(path.to_path_buf()))?;
+        bytes
+    };
+    let symbols = String::from_utf8_lossy(&replacement_bytes);
+    if symbols.contains("java/awt/Toolkit") || !symbols.contains("com.apple.eio.FileManager") {
+        return Err(LaunchError::InvalidLwjglMacosCompat(path.to_path_buf()));
+    }
+    let display_patch_bytes = {
+        let mut display_patch = archive
+            .by_name("org/lwjgl/opengl/MacOSXDisplay.class")
+            .map_err(|_| LaunchError::InvalidLwjglMacosCompat(path.to_path_buf()))?;
+        let mut bytes = Vec::new();
+        display_patch
+            .read_to_end(&mut bytes)
+            .map_err(|_| LaunchError::InvalidLwjglMacosCompat(path.to_path_buf()))?;
+        bytes
+    };
+    if !String::from_utf8_lossy(&display_patch_bytes)
+        .contains("OPUS_MODERN_MACOS_DISPLAY_COMPAT_V1")
+        || !String::from_utf8_lossy(&display_patch_bytes)
+        .contains("OPUS_COCOA_LIVE_RESIZE_HANDSHAKE_V10_APPKIT_DRAWABLE_UPDATE")
+    {
+        return Err(LaunchError::InvalidLwjglMacosCompat(path.to_path_buf()));
+    }
+    let peer_info_patch_bytes = {
+        let mut peer_info_patch = archive
+            .by_name("org/lwjgl/opengl/MacOSXCanvasPeerInfo.class")
+            .map_err(|_| LaunchError::InvalidLwjglMacosCompat(path.to_path_buf()))?;
+        let mut bytes = Vec::new();
+        peer_info_patch
+            .read_to_end(&mut bytes)
+            .map_err(|_| LaunchError::InvalidLwjglMacosCompat(path.to_path_buf()))?;
+        bytes
+    };
+    if !String::from_utf8_lossy(&peer_info_patch_bytes)
+        .contains("OPUS_MODERN_MACOS_PIXEL_FORMAT_COMPAT_V2")
+    {
+        return Err(LaunchError::InvalidLwjglMacosCompat(path.to_path_buf()));
+    }
+    let guard_bytes = {
+        let mut guard = archive
+            .by_name(FORGE_LWJGL_RESIZE_GUARD_FILE_NAME)
+            .map_err(|_| LaunchError::InvalidLwjglMacosCompat(path.to_path_buf()))?;
+        let mut bytes = Vec::new();
+        guard
+            .read_to_end(&mut bytes)
+            .map_err(|_| LaunchError::InvalidLwjglMacosCompat(path.to_path_buf()))?;
+        bytes
+    };
+    let guard_sha1 = format!("{:x}", Sha1::digest(&guard_bytes));
+    let guard_is_x86_64_mach_o = guard_bytes.starts_with(&[0xcf, 0xfa, 0xed, 0xfe]);
+    if guard_bytes.len() as u64 != FORGE_LWJGL_RESIZE_GUARD_SIZE
+        || !guard_sha1.eq_ignore_ascii_case(FORGE_LWJGL_RESIZE_GUARD_SHA1)
+        || !guard_is_x86_64_mach_o
+        || !String::from_utf8_lossy(&guard_bytes)
+            .contains("OPUS_COCOA_LIVE_RESIZE_GUARD_V9_APPKIT_DRAWABLE_UPDATE")
+    {
+        return Err(LaunchError::InvalidLwjglMacosCompat(path.to_path_buf()));
+    }
+    Ok(())
+}
+
 fn validate_forge_coremod(path: &Path, spec: &crate::DownloadSpec) -> Result<(), LaunchError> {
     if !path.is_file() {
         return Err(LaunchError::MissingForgeCoremod(path.to_path_buf()));
@@ -619,19 +953,17 @@ fn manifest_has_attribute(manifest: &str, key: &str, expected: &str) -> bool {
 
 fn validate_managed_forge_mods(
     layout: &MinecraftLayout,
-    optifine_jar: &Path,
-    coremod_jar: &Path,
+    managed_jars: &[&Path],
 ) -> Result<(), LaunchError> {
-    let expected_optifine =
-        fs::canonicalize(optifine_jar).map_err(|source| LaunchError::CanonicalizeClasspath {
-            path: optifine_jar.to_path_buf(),
-            source,
-        })?;
-    let expected_coremod =
-        fs::canonicalize(coremod_jar).map_err(|source| LaunchError::CanonicalizeClasspath {
-            path: coremod_jar.to_path_buf(),
-            source,
-        })?;
+    let expected = managed_jars
+        .iter()
+        .map(|path| {
+            fs::canonicalize(path).map_err(|source| LaunchError::CanonicalizeClasspath {
+                path: (*path).to_path_buf(),
+                source,
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     for entry in fs::read_dir(layout.mods_dir())? {
         let entry = entry?;
         let candidate = entry.path();
@@ -651,7 +983,7 @@ fn validate_managed_forge_mods(
                 path: candidate.clone(),
                 source,
             })?;
-        if canonical != expected_optifine && canonical != expected_coremod {
+        if !expected.iter().any(|managed| managed == &canonical) {
             return Err(LaunchError::UnmanagedForgeMod(candidate));
         }
     }
@@ -659,7 +991,7 @@ fn validate_managed_forge_mods(
 }
 
 /// The old typed client-mod name is a bounded migration target. Remove only
-/// that exact regular file before validating the two-artifact Forge set so an
+/// that exact regular file before validating the managed Forge set so an
 /// older launcher session cannot resurrect any in-game UI path.
 fn remove_retired_forge_client_mod(layout: &MinecraftLayout) -> Result<(), LaunchError> {
     let path = layout.mods_dir().join("opus-client-legacy-1.8.9.jar");
@@ -1528,6 +1860,14 @@ pub enum LaunchError {
     MissingForgeCoremod(PathBuf),
     #[error("Opus Forge coremod is invalid: {}", .0.display())]
     InvalidForgeCoremod(PathBuf),
+    #[error("Opus Forge UI artifact is missing: {}", .0.display())]
+    MissingForgeUiArtifact(PathBuf),
+    #[error("Opus Forge UI artifact is invalid: {}", .0.display())]
+    InvalidForgeUiArtifact(PathBuf),
+    #[error("Opus macOS LWJGL compatibility artifact is missing: {}", .0.display())]
+    MissingLwjglMacosCompat(PathBuf),
+    #[error("Opus macOS LWJGL compatibility artifact is invalid: {}", .0.display())]
+    InvalidLwjglMacosCompat(PathBuf),
     #[error("unmanaged JAR or directory in isolated Forge mods directory: {}", .0.display())]
     UnmanagedForgeMod(PathBuf),
     #[error("failed to canonicalize classpath entry {path}", path = .path.display())]
@@ -1626,6 +1966,11 @@ mod tests {
         options: LaunchOptions,
         bootstrap_jar: PathBuf,
         coremod_jar: PathBuf,
+        native_ui_jar: PathBuf,
+        opusconfig_jar: PathBuf,
+        elementa_jar: PathBuf,
+        universalcraft_jar: PathBuf,
+        lwjgl_macos_compat_jar: PathBuf,
         optifine_jar: PathBuf,
         contract: ForgeLaunchContract,
     }
@@ -1640,6 +1985,17 @@ mod tests {
             let forge_classpath = temporary.path().join("forge-runtime.jar");
             let vanilla_classpath = temporary.path().join("vanilla-client.jar");
             let coremod_jar = temporary.path().join("opus-runtime-legacy-1.8.9-0.0.1.jar");
+            let native_ui_jar = temporary.path().join("opus-native-ui-1.8.9-0.1.0.jar");
+            let opusconfig_jar = temporary
+                .path()
+                .join("opus-oneconfig-1.8.9-forge-0.2.2-alpha228-full.jar");
+            let elementa_jar = temporary.path().join("opus-elementa-762.jar");
+            let universalcraft_jar = temporary
+                .path()
+                .join("opus-universalcraft-1.8.9-forge-516.jar");
+            let lwjgl_macos_compat_jar = temporary
+                .path()
+                .join("opus-lwjgl-macos-compat-2.9.2-nightly-20140822.jar");
             let native_archive = temporary.path().join("natives.jar");
             fs::write(&bootstrap_jar, b"bootstrap fixture").unwrap();
             fs::write(&forge_classpath, b"forge fixture").unwrap();
@@ -1661,12 +2017,41 @@ mod tests {
                     ("org/polydevs/opusmc/forge/OpusLoadingPlugin.class", b"coremod fixture"),
                 ],
             );
+            for (path, marker) in [
+                (&native_ui_jar, b"native UI fixture".as_slice()),
+                (&opusconfig_jar, b"OpusConfig fixture".as_slice()),
+                (&elementa_jar, b"Elementa fixture".as_slice()),
+                (&universalcraft_jar, b"UniversalCraft fixture".as_slice()),
+            ] {
+                write_zip(path, &[("fixture.txt", marker)]);
+            }
+            write_zip(
+                &lwjgl_macos_compat_jar,
+                &[
+                    (
+                        "META-INF/MANIFEST.MF",
+                        b"Manifest-Version: 1.0\r\nSealed: true\r\n\r\n",
+                    ),
+                    (
+                        "org/lwjgl/MacOSXSysImplementation.class",
+                        b"com.apple.eio.FileManager",
+                    ),
+                    ("org/lwjgl/J2SESysImplementation.class", b"parent"),
+                    ("org/lwjgl/DefaultSysImplementation.class", b"parent"),
+                    ("org/lwjgl/SysImplementation.class", b"parent"),
+                ],
+            );
             let optifine_jar = layout.optifine_mod();
             fs::create_dir_all(optifine_jar.parent().unwrap()).unwrap();
             fs::write(&optifine_jar, b"optifine fixture").unwrap();
             let contract = ForgeLaunchContract {
                 optifine: fixture_spec(&optifine_jar),
                 coremod: fixture_spec(&coremod_jar),
+                native_ui: fixture_spec(&native_ui_jar),
+                opusconfig: fixture_spec(&opusconfig_jar),
+                elementa: fixture_spec(&elementa_jar),
+                universalcraft: fixture_spec(&universalcraft_jar),
+                lwjgl_macos_compat: fixture_spec(&lwjgl_macos_compat_jar),
             };
             let minecraft = InstalledMinecraft {
                 version: fixture_minecraft_version(),
@@ -1700,6 +2085,11 @@ mod tests {
                 options: LaunchOptions::default(),
                 bootstrap_jar,
                 coremod_jar,
+                native_ui_jar,
+                opusconfig_jar,
+                elementa_jar,
+                universalcraft_jar,
+                lwjgl_macos_compat_jar,
                 optifine_jar,
                 contract,
             }
@@ -1709,6 +2099,13 @@ mod tests {
             LaunchMode::ForgeBootstrap {
                 bootstrap_jar: self.bootstrap_jar.clone(),
                 coremod_jar: self.coremod_jar.clone(),
+                ui: ForgeUiArtifacts {
+                    native_ui_jar: self.native_ui_jar.clone(),
+                    opusconfig_jar: self.opusconfig_jar.clone(),
+                    elementa_jar: self.elementa_jar.clone(),
+                    universalcraft_jar: self.universalcraft_jar.clone(),
+                    lwjgl_macos_compat_jar: self.lwjgl_macos_compat_jar.clone(),
+                },
             }
         }
 
@@ -1801,7 +2198,7 @@ mod tests {
     }
 
     #[test]
-    fn macos_jvm_arguments_set_the_dock_name() {
+    fn macos_jvm_arguments_keep_the_verified_lwjgl_launch_contract() {
         assert_eq!(
             platform_jvm_arguments(OperatingSystem::MacOs),
             vec![OsString::from("-Xdock:name=Minecraft")]
@@ -1959,6 +2356,19 @@ mod tests {
         let mode = LaunchMode::ForgeBootstrap {
             bootstrap_jar: PathBuf::from("/private/opus-bootstrap-0.0.1.jar"),
             coremod_jar: PathBuf::from("/private/opus-runtime-legacy-1.8.9-0.0.1.jar"),
+            ui: ForgeUiArtifacts {
+                native_ui_jar: PathBuf::from("/private/opus-native-ui-1.8.9-0.1.0.jar"),
+                opusconfig_jar: PathBuf::from(
+                    "/private/opus-oneconfig-1.8.9-forge-0.2.2-alpha228-full.jar",
+                ),
+                elementa_jar: PathBuf::from("/private/opus-elementa-762.jar"),
+                universalcraft_jar: PathBuf::from(
+                    "/private/opus-universalcraft-1.8.9-forge-516.jar",
+                ),
+                lwjgl_macos_compat_jar: PathBuf::from(
+                    "/private/opus-lwjgl-macos-compat-2.9.2-nightly-20140822.jar",
+                ),
+            },
         };
 
         write_session_manifest(
@@ -2025,6 +2435,19 @@ mod tests {
         let canonical = canonicalize_classpath(std::slice::from_ref(&relative)).unwrap();
         assert!(canonical[0].is_absolute());
         assert!(canonical[0].is_file());
+    }
+
+    #[test]
+    fn identifies_only_the_pinned_lwjgl_java_artifact_for_macos_removal() {
+        assert!(is_pinned_lwjgl_macos_java_artifact(Path::new(
+            "/private/libraries/org/lwjgl/lwjgl/2.9.2-nightly-20140822/lwjgl-2.9.2-nightly-20140822.jar",
+        )));
+        assert!(!is_pinned_lwjgl_macos_java_artifact(Path::new(
+            "/private/libraries/org/lwjgl/lwjgl_util/2.9.2-nightly-20140822/lwjgl_util-2.9.2-nightly-20140822.jar",
+        )));
+        assert!(!is_pinned_lwjgl_macos_java_artifact(Path::new(
+            "/private/mods/opus-lwjgl-macos-compat-2.9.2-nightly-20140822.jar",
+        )));
     }
 
     #[test]
@@ -2095,10 +2518,10 @@ mod tests {
     }
 
     #[test]
-    fn forge_bootstrap_plan_stages_only_the_coremod_and_removes_the_retired_client_mod() {
+    fn forge_bootstrap_plan_stages_the_ui_set_and_removes_the_retired_client_mod() {
         let fixture = ForgeFixture::new();
         // A prior launcher may have left same-named, stale UI artifacts in an
-        // identity directory. The Core-Mod-only contract must remove them
+        // identity directory. The managed artifact contract must remove it
         // before Forge is allowed to discover the managed mod set.
         fs::write(
             fixture
@@ -2133,6 +2556,18 @@ mod tests {
             vec![OsString::from("--opus-game-arguments-stdin")]
         );
         assert!(plan.stdin_payload.is_some());
+        assert!(plan.jvm_arguments.contains(&OsString::from(format!(
+            "-Dopus.native.ui.session={}",
+            plan.session_id
+        ))));
+        assert!(
+            plan.jvm_arguments
+                .contains(&OsString::from("-Dopus.native.ui.enabled=true"))
+        );
+        assert!(
+            plan.jvm_arguments
+                .contains(&OsString::from("-Dopus.native.ui.requireOptifine=true"))
+        );
 
         let classpath = system_classpath(&plan);
         assert_eq!(
@@ -2156,6 +2591,33 @@ mod tests {
         );
         validate_forge_coremod(&staged_coremod, &fixture.contract.coremod).unwrap();
 
+        for (name, source, spec) in [
+            (
+                "opus-native-ui-1.8.9-0.1.0.jar",
+                &fixture.native_ui_jar,
+                &fixture.contract.native_ui,
+            ),
+            (
+                "opus-oneconfig-1.8.9-forge-0.2.2-alpha228-full.jar",
+                &fixture.opusconfig_jar,
+                &fixture.contract.opusconfig,
+            ),
+            (
+                "opus-elementa-762.jar",
+                &fixture.elementa_jar,
+                &fixture.contract.elementa,
+            ),
+            (
+                "opus-universalcraft-1.8.9-forge-516.jar",
+                &fixture.universalcraft_jar,
+                &fixture.contract.universalcraft,
+            ),
+        ] {
+            let staged = fixture.layout.mods_dir().join(name);
+            assert_eq!(fs::read(&staged).unwrap(), fs::read(source).unwrap());
+            validate_forge_ui_artifact(&staged, spec).unwrap();
+        }
+
         assert!(
             !fixture
                 .layout
@@ -2163,8 +2625,34 @@ mod tests {
                 .join("opus-client-legacy-1.8.9.jar")
                 .exists()
         );
-        validate_managed_forge_mods(&fixture.layout, &fixture.optifine_jar, &staged_coremod)
-            .unwrap();
+        validate_managed_forge_mods(
+            &fixture.layout,
+            &[
+                fixture.optifine_jar.as_path(),
+                staged_coremod.as_path(),
+                fixture
+                    .layout
+                    .mods_dir()
+                    .join("opus-native-ui-1.8.9-0.1.0.jar")
+                    .as_path(),
+                fixture
+                    .layout
+                    .mods_dir()
+                    .join("opus-oneconfig-1.8.9-forge-0.2.2-alpha228-full.jar")
+                    .as_path(),
+                fixture
+                    .layout
+                    .mods_dir()
+                    .join("opus-elementa-762.jar")
+                    .as_path(),
+                fixture
+                    .layout
+                    .mods_dir()
+                    .join("opus-universalcraft-1.8.9-forge-516.jar")
+                    .as_path(),
+            ],
+        )
+        .unwrap();
     }
 
     #[test]

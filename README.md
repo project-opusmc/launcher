@@ -34,12 +34,19 @@ runtime-manifest.json
 runtime-checksums.json
 artifacts/opus-bootstrap-<version>.jar
 artifacts/opus-runtime-legacy-1.8.9-<version>.jar
+artifacts/opus-lwjgl-macos-compat-2.9.2-nightly-20140822.jar
+artifacts/opus-native-ui-1.8.9-0.1.0.jar
+artifacts/opus-oneconfig-1.8.9-forge-0.2.2-alpha228-full.jar
+artifacts/opus-elementa-762.jar
+artifacts/opus-universalcraft-1.8.9-forge-516.jar
 ```
 
-The Core Mod JAR is the only OPUS mod staged beside locally imported OptiFine.
-No product client JAR, CEF/webview helper, or legacy UI artifact is part of the
-unified launcher runtime contract. Before Forge scans an isolated instance, the
-launcher removes a known stale `opus-client-legacy-1.8.9.jar`.
+Launcher stages the Core Mod, sealed LWJGL macOS compatibility artifact, native
+Elementa shell bridge, branded OpusConfig, Elementa, and UniversalCraft beside
+locally imported OptiFine. No CEF/webview helper or retired monolithic client
+JAR is part of the unified runtime contract.
+Before Forge scans an isolated instance, Launcher removes a known stale
+`opus-client-legacy-1.8.9.jar`.
 
 Set `OPUS_RUNTIME_ARTIFACT_DIR` to a verified Runtime output directory before a
 desktop build. In the superproject this staging is handled by the root build

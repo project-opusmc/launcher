@@ -8,9 +8,10 @@ invariant genuinely needs to change, record the reasoning in a new ADR.
 
 1. **No unverified bytes reach the game.** Every managed artifact — version
    JSON, client JAR, Mojang and Forge libraries, natives, assets, Java runtime
-   files, Log4j config, and the OPUS Core Mod — must match its declared size
-   and SHA-1 before use. All managed downloads go through `Downloader::ensure`;
-   there is no bypass path.
+   files, Log4j config, the OPUS Core Mod, native UI, OpusConfig, Elementa, and
+   UniversalCraft — must match its declared size and SHA-1 before use. All
+   managed downloads go through `Downloader::ensure`; bundled Runtime artifacts
+   have the same fail-closed verification before staging.
 2. **Downloads are atomic.** Bytes land in a sibling `.part-<pid>` file, are
    verified, then renamed. A failed verification deletes the partial file.
 3. **HTTPS only.** `validate_url` rejects every other scheme, including for JSON
@@ -116,10 +117,10 @@ invariant genuinely needs to change, record the reasoning in a new ADR.
     launcher.
 33. **The OPUS Forge artifacts are exact and instance-owned.** Before staging,
     the Core Mod checksum, size, and `FMLCorePlugin` manifest attributes are
-    verified. Every launch atomically replaces same-named stale files in the
-    selected identity directory, and Forge discovers only locked OptiFine and
-    the Core Mod there, never from the shared game directory or an arbitrary
-    launcher path.
+    verified, as are the native UI, OpusConfig, Elementa, and UniversalCraft
+    checksums and sizes. Every launch atomically replaces same-named stale files
+    in the selected identity directory, and Forge discovers only that locked set
+    plus OptiFine, never the shared game directory or an arbitrary launcher path.
 34. **Transformers fail closed.** A patch asserts its anchor and throws when the
     count is unexpected — zero or multiple matches fail the class load rather
     than applying an uncertain patch.
@@ -131,9 +132,10 @@ invariant genuinely needs to change, record the reasoning in a new ADR.
 37. **Forge bootstrap arguments are exact.** The stdin-protocol marker is
     required; unknown or duplicated control arguments and trailing payload bytes
     throw. Forge's `FMLTweaker` is guaranteed before `Launch.main`.
-38. **Vanilla owns UI and input.** The Core Mod artifact is rejected if it
-    contains a GUI hook, key binding/input class, CEF/webview symbol, or the
-    retired standalone loader.
+38. **The native UI bridge exclusively owns OPUS UI and input.** The Core Mod is
+    rejected if it contains a GUI/input hook; the native UI bridge supplies the
+    Elementa title/pause shell and owns the physical Right Shift OpusConfig
+    toggle. CEF/webview symbols and the retired standalone loader remain banned.
 39. **Java 8 bytecode, no warnings.** `options.release = 8` with `-Werror` for
     every module.
 
@@ -145,9 +147,13 @@ invariant genuinely needs to change, record the reasoning in a new ADR.
     Java child, activates its real window, and preserves the stdin protocol.
     It must reap the child with `waitpid(..., WNOHANG)` while waiting so native
     JVM crashes cannot become a false 60-second startup hang.
-41. **No `-XstartOnFirstThread` for 1.8.9.** It is a later-metadata trait and is
-    not valid on this launch path. No Carbon process transform or JNI is used;
-    AppKit/CoreGraphics are limited to activating the stub-owned game window.
+41. **macOS reserves Java's first thread for AppKit.** LWJGL 2 creates and
+    resizes the Minecraft window through Cocoa, so the managed Java 8 process
+    launches with `-XstartOnFirstThread`. The foreground game stub starts Java
+    with `posix_spawn`, never `fork()`, so AppKit/CoreFoundation state is not
+    copied into the Java process. No Carbon process transform or JNI is used;
+    AppKit/CoreGraphics in the stub remain limited to launching and activating
+    the real game window.
 42. **Rosetta is required and checked.** Verified with
     `/usr/bin/arch -x86_64 /usr/bin/true` before launch, with a clear failure
     message.
@@ -168,12 +174,12 @@ invariant genuinely needs to change, record the reasoning in a new ADR.
 46. **The game directory is isolated from `.minecraft`.**
 47. **Memory bounds are validated twice** — on save and again before launch
     (512–16384 MiB).
-48. **Managed Forge mod sets are allowlisted.** They consist only of the exact
-    imported OptiFine JAR and verified OPUS Core Mod. The known stale OPUS client
-    JAR is removed before validation; every other unexpected top-level
-    managed-mod entry fails launch. A future mod requires a lock, validation
-    coverage for every Forge-discoverable directory, ordering review, and
-    tests before it is supported.
+48. **Managed Forge mod sets are allowlisted.** They consist only of exact
+    imported OptiFine, Core Mod, native UI, OpusConfig, Elementa, and
+    UniversalCraft JARs. The known stale OPUS client JAR is removed before
+    validation; every other unexpected top-level managed-mod entry fails launch.
+    A future mod requires a lock, validation coverage for every Forge-discoverable
+    directory, ordering review, and tests before it is supported.
 49. **Offline mode is not an access-control system.** An unofficial profile can
     pick any username; those sessions require operator-controlled servers with a
     whitelist.

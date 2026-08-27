@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { execFileSync } from "node:child_process";
 import { readFileSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -20,6 +21,14 @@ function readConstant(source, name, pattern) {
   return match[1];
 }
 
+function readZipEntry(archive, entry) {
+  try {
+    return execFileSync("unzip", ["-p", archive, entry]);
+  } catch {
+    throw new Error(`Runtime artifact is missing ZIP entry ${entry}: ${archive}`);
+  }
+}
+
 const forge = readFileSync(forgeSource, "utf8");
 const expected = {
   coremod: {
@@ -36,6 +45,100 @@ const expected = {
       ).replaceAll("_", ""),
     ),
   },
+  nativeUi: {
+    sha1: readConstant(
+      forge,
+      "FORGE_NATIVE_UI_SHA1",
+      /FORGE_NATIVE_UI_SHA1:\s*&str\s*=\s*"([0-9a-f]{40})"/,
+    ),
+    size: Number(
+      readConstant(
+        forge,
+        "FORGE_NATIVE_UI_SIZE",
+        /FORGE_NATIVE_UI_SIZE:\s*u64\s*=\s*([0-9_]+)/,
+      ).replaceAll("_", ""),
+    ),
+  },
+  opusconfig: {
+    sha1: readConstant(
+      forge,
+      "FORGE_OPUSCONFIG_SHA1",
+      /FORGE_OPUSCONFIG_SHA1:\s*&str\s*=\s*"([0-9a-f]{40})"/,
+    ),
+    size: Number(
+      readConstant(
+        forge,
+        "FORGE_OPUSCONFIG_SIZE",
+        /FORGE_OPUSCONFIG_SIZE:\s*u64\s*=\s*([0-9_]+)/,
+      ).replaceAll("_", ""),
+    ),
+  },
+  elementa: {
+    sha1: readConstant(
+      forge,
+      "FORGE_ELEMENTA_SHA1",
+      /FORGE_ELEMENTA_SHA1:\s*&str\s*=\s*"([0-9a-f]{40})"/,
+    ),
+    size: Number(
+      readConstant(
+        forge,
+        "FORGE_ELEMENTA_SIZE",
+        /FORGE_ELEMENTA_SIZE:\s*u64\s*=\s*([0-9_]+)/,
+      ).replaceAll("_", ""),
+    ),
+  },
+  universalcraft: {
+    sha1: readConstant(
+      forge,
+      "FORGE_UNIVERSALCRAFT_SHA1",
+      /FORGE_UNIVERSALCRAFT_SHA1:\s*&str\s*=\s*"([0-9a-f]{40})"/,
+    ),
+    size: Number(
+      readConstant(
+        forge,
+        "FORGE_UNIVERSALCRAFT_SIZE",
+        /FORGE_UNIVERSALCRAFT_SIZE:\s*u64\s*=\s*([0-9_]+)/,
+      ).replaceAll("_", ""),
+    ),
+  },
+  lwjglMacosCompat: {
+    sha1: readConstant(
+      forge,
+      "FORGE_LWJGL_MACOS_COMPAT_SHA1",
+      /FORGE_LWJGL_MACOS_COMPAT_SHA1:\s*&str\s*=\s*"([0-9a-f]{40})"/,
+    ),
+    size: Number(
+      readConstant(
+        forge,
+        "FORGE_LWJGL_MACOS_COMPAT_SIZE",
+        /FORGE_LWJGL_MACOS_COMPAT_SIZE:\s*u64\s*=\s*([0-9_]+)/,
+      ).replaceAll("_", ""),
+    ),
+    nativeSha1: readConstant(
+      forge,
+      "FORGE_LWJGL_MACOS_NATIVE_SHA1",
+      /FORGE_LWJGL_MACOS_NATIVE_SHA1:\s*\&str\s*=\s*"([0-9a-f]{40})"/,
+    ),
+    nativeSize: Number(
+      readConstant(
+        forge,
+        "FORGE_LWJGL_MACOS_NATIVE_SIZE",
+        /FORGE_LWJGL_MACOS_NATIVE_SIZE:\s*u64\s*=\s*([0-9_]+)/,
+      ).replaceAll("_", ""),
+    ),
+    guardSha1: readConstant(
+      forge,
+      "FORGE_LWJGL_RESIZE_GUARD_SHA1",
+      /FORGE_LWJGL_RESIZE_GUARD_SHA1:\s*&str\s*=\s*"([0-9a-f]{40})"/,
+    ),
+    guardSize: Number(
+      readConstant(
+        forge,
+        "FORGE_LWJGL_RESIZE_GUARD_SIZE",
+        /FORGE_LWJGL_RESIZE_GUARD_SIZE:\s*u64\s*=\s*([0-9_]+)/,
+      ).replaceAll("_", ""),
+    ),
+  },
 };
 
 const manifest = JSON.parse(
@@ -49,7 +152,7 @@ if (
   manifest.protocolVersion !== 1 ||
   manifest.minecraftVersion !== "1.8.9" ||
   !Array.isArray(manifest.artifacts) ||
-  manifest.artifacts.length !== 2 ||
+  manifest.artifacts.length !== 7 ||
   checksums.schemaVersion !== 1 ||
   checksums.algorithm !== "SHA-256" ||
   checksums.files === null ||
@@ -67,15 +170,38 @@ for (const artifact of manifest.artifacts) {
 }
 
 const required = [
-  ["runtime-legacy-1.8.9", "coremod", "opus-runtime-legacy-1.8.9-"],
+  ["runtime-legacy-1.8.9", "coremod", "opus-runtime-legacy-1.8.9-", null],
+  [
+    "lwjgl-macos-compat",
+    "lwjglMacosCompat",
+    null,
+    "opus-lwjgl-macos-compat-2.9.2-nightly-20140822.jar",
+  ],
+  ["native-ui", "nativeUi", null, "opus-native-ui-1.8.9-0.1.0.jar"],
+  [
+    "opusconfig",
+    "opusconfig",
+    null,
+    "opus-oneconfig-1.8.9-forge-0.2.2-alpha228-full.jar",
+  ],
+  ["elementa", "elementa", null, "opus-elementa-762.jar"],
+  [
+    "universalcraft",
+    "universalcraft",
+    null,
+    "opus-universalcraft-1.8.9-forge-516.jar",
+  ],
 ];
-for (const [role, contract, namePrefix] of required) {
+for (const [role, contract, namePrefix, exactName] of required) {
   const artifact = records.get(role);
+  const validName =
+    typeof artifact?.file === "string" &&
+    (exactName
+      ? artifact.file === exactName
+      : artifact.file.startsWith(namePrefix) && artifact.file.endsWith(".jar"));
   if (
     !artifact ||
-    typeof artifact.file !== "string" ||
-    !artifact.file.startsWith(namePrefix) ||
-    !artifact.file.endsWith(".jar") ||
+    !validName ||
     !Number.isSafeInteger(artifact.size) ||
     artifact.size <= 0 ||
     !/^[0-9a-f]{64}$/.test(artifact.sha256)
@@ -101,6 +227,69 @@ for (const [role, contract, namePrefix] of required) {
         `got ${actualSha1}/${bytes.length}`,
     );
   }
+
+  if (role === "lwjgl-macos-compat") {
+    for (const requiredEntry of [
+      "org/lwjgl/MacOSXSysImplementation.class",
+      "org/lwjgl/J2SESysImplementation.class",
+      "org/lwjgl/DefaultSysImplementation.class",
+      "org/lwjgl/SysImplementation.class",
+      "org/lwjgl/opengl/MacOSXDisplay.class",
+      "org/lwjgl/opengl/MacOSXCanvasPeerInfo.class",
+      "org/lwjgl/opengl/MacOSXCanvasPeerInfo$1.class",
+      "org/lwjgl/opengl/MacOSXDisplayPeerInfo.class",
+    ]) {
+      readZipEntry(path, requiredEntry);
+    }
+    const displaySymbols = readZipEntry(
+      path,
+      "org/lwjgl/opengl/MacOSXDisplay.class",
+    ).toString("latin1");
+    const peerInfoSymbols = readZipEntry(
+      path,
+      "org/lwjgl/opengl/MacOSXCanvasPeerInfo.class",
+    ).toString("latin1");
+    if (
+      !displaySymbols.includes("OPUS_MODERN_MACOS_DISPLAY_COMPAT_V1") ||
+      !displaySymbols.includes("OPUS_COCOA_LIVE_RESIZE_HANDSHAKE_V10_APPKIT_DRAWABLE_UPDATE") ||
+      !peerInfoSymbols.includes("OPUS_MODERN_MACOS_PIXEL_FORMAT_COMPAT_V2")
+    ) {
+      throw new Error(
+        `Embedded LWJGL Java compatibility patch is missing: ${artifact.file}`,
+      );
+    }
+    const native = readZipEntry(path, "liblwjgl.dylib");
+    const nativeSha1 = createHash("sha1").update(native).digest("hex");
+    const isMachO =
+      native.subarray(0, 4).equals(Buffer.from([0xca, 0xfe, 0xba, 0xbe])) ||
+      native.subarray(0, 4).equals(Buffer.from([0xcf, 0xfa, 0xed, 0xfe]));
+    if (
+      native.length !== expected[contract].nativeSize ||
+      nativeSha1 !== expected[contract].nativeSha1 ||
+      !isMachO
+    ) {
+      throw new Error(
+        `Embedded macOS LWJGL native integrity mismatch: ${artifact.file}`,
+      );
+    }
+    const guard = readZipEntry(path, "libopus_lwjgl_resize_guard.dylib");
+    const guardSha1 = createHash("sha1").update(guard).digest("hex");
+    const guardIsMachO = guard
+      .subarray(0, 4)
+      .equals(Buffer.from([0xcf, 0xfa, 0xed, 0xfe]));
+    if (
+      guard.length !== expected[contract].guardSize ||
+      guardSha1 !== expected[contract].guardSha1 ||
+      !guardIsMachO ||
+      !guard
+        .toString("latin1")
+        .includes("OPUS_COCOA_LIVE_RESIZE_GUARD_V9_APPKIT_DRAWABLE_UPDATE")
+    ) {
+      throw new Error(
+        `Embedded Cocoa live-resize guard integrity mismatch: ${artifact.file}`,
+      );
+    }
+  }
 }
 
 const bootstrap = records.get("bootstrap");
@@ -118,5 +307,5 @@ if (!statSync(bootstrapPath).isFile()) {
 }
 
 console.log(
-  `Runtime launch contract verified: ${expected.coremod.size} byte Core Mod`,
+  "Runtime launch contract verified: Core Mod + LWJGL macOS compatibility + native UI + OpusConfig + Elementa + UniversalCraft",
 );

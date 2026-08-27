@@ -120,9 +120,10 @@ OptiFine is not a network-install step. `import_optifine` accepts only a local
 file that matches the lock's exact size and SHA-1, copies it atomically into the
 shared local import cache, and never changes or removes the source file. At
 launch it is verified again and staged into the selected identity's isolated
-`instances/<uuid>/game/mods/` directory. The verified OPUS Core Mod is staged
-there on every launch. The launcher removes the exact retired
-`opus-client-legacy-1.8.9.jar` before validating the two-artifact Forge set.
+`instances/<uuid>/game/mods/` directory. The verified OPUS Core Mod, native UI,
+OpusConfig, Elementa, and UniversalCraft JARs are staged there on every launch.
+The launcher removes the exact retired `opus-client-legacy-1.8.9.jar` before
+validating the managed Forge set.
 Forge is never launched with the shared `game/mods` directory; an unmanaged
 file or directory in the isolated set fails closed. Offline-profile policy is
 documented in [qa-offline.md](qa-offline.md).
@@ -204,8 +205,8 @@ split with `shlex`; every `${…}` placeholder must resolve, including Forge's
 fails with `UnresolvedPlaceholder`.
 
 **Supported launch mode: `ForgeBootstrap`.** The runtime id must equal the
-locked Forge profile, the managed OptiFine JAR must verify, and both bundled OPUS
-artifacts must be present. The launcher:
+locked Forge profile, the managed OptiFine JAR must verify, and all six bundled
+Runtime artifacts must be present. The launcher:
 
 - canonicalizes the single `bootstrap-*.jar` and all managed Forge/Minecraft
   classpath entries;
@@ -214,13 +215,16 @@ artifacts must be present. The launcher:
 - sends the ordinary game arguments through stdin; and
 - verifies the OPUS Runtime coremod checksum and required `FMLCorePlugin`
   manifest, then stages it as `game/mods/opus-runtime-legacy-1.8.9.jar`;
+- verifies and stages the native UI bridge, branded OpusConfig fork, Elementa,
+  and UniversalCraft under fixed filenames;
 - removes the exact retired `game/mods/opus-client-legacy-1.8.9.jar` before
   Forge discovery; and
 - rejects an unexpected visible top-level entry in the managed `game/mods/`
   directory.
 
-The Core Mod is the sole OPUS Forge integration. Launcher treats the bootstrap
-and Core Mod as immutable artifacts and does not compile their source.
+The Core Mod owns bytecode/lifecycle integration. The native UI bridge owns the
+Elementa shell and physical Right Shift OpusConfig toggle. Launcher treats all
+six Runtime artifacts as immutable inputs and does not compile their source.
 
 The product desktop and CLI paths do not select `Direct` or standalone
 `Bootstrap` mode. Those internal variants exist only for test boundaries; they

@@ -185,6 +185,7 @@ pub fn upsert_offline(paths: &OpusPaths, username: &str) -> Result<AccountSummar
 /// Import a legacy offline profile without replacing the user's current
 /// selection. The unified launcher uses this once when it discovers data left
 /// by the retired QA package.
+#[cfg(any(not(feature = "ui-preview"), test))]
 pub fn migrate_offline_profile(
     paths: &OpusPaths,
     username: &str,

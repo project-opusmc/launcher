@@ -1,6 +1,7 @@
 use crate::{NativeArchive, safe_join};
+use sha1::{Digest, Sha1};
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, BufReader};
+use std::io::{self, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 use zip::ZipArchive;
@@ -82,6 +83,81 @@ pub fn extract_natives(
     Ok(extracted)
 }
 
+/// Replaces one extracted native with a reviewed file embedded in a Runtime
+/// compatibility artifact. The replacement is written privately and renamed
+/// atomically so a failed launch cannot leave a partially written dylib.
+pub fn replace_native_from_archive(
+    archive_path: &Path,
+    entry_name: &str,
+    destination: &Path,
+    expected_sha1: &str,
+    expected_size: u64,
+) -> Result<PathBuf, NativeError> {
+    let file = File::open(archive_path).map_err(|source| NativeError::OpenArchive {
+        path: archive_path.to_path_buf(),
+        source,
+    })?;
+    let mut archive =
+        ZipArchive::new(BufReader::new(file)).map_err(|source| NativeError::InvalidArchive {
+            path: archive_path.to_path_buf(),
+            source,
+        })?;
+    let mut entry = archive
+        .by_name(entry_name)
+        .map_err(|_| NativeError::MissingOverlayEntry {
+            archive: archive_path.to_path_buf(),
+            entry: entry_name.to_owned(),
+        })?;
+    if entry.is_dir() {
+        return Err(NativeError::MissingOverlayEntry {
+            archive: archive_path.to_path_buf(),
+            entry: entry_name.to_owned(),
+        });
+    }
+
+    let mut bytes = Vec::new();
+    entry.read_to_end(&mut bytes)?;
+    let actual_sha1 = format!("{:x}", Sha1::digest(&bytes));
+    if bytes.len() as u64 != expected_size || !actual_sha1.eq_ignore_ascii_case(expected_sha1) {
+        return Err(NativeError::OverlayIntegrityMismatch {
+            entry: entry_name.to_owned(),
+            expected_sha1: expected_sha1.to_owned(),
+            actual_sha1,
+            expected_size,
+            actual_size: bytes.len() as u64,
+        });
+    }
+
+    let file_name = destination
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| NativeError::MissingParent(destination.to_path_buf()))?;
+    let parent = destination
+        .parent()
+        .ok_or_else(|| NativeError::MissingParent(destination.to_path_buf()))?;
+    fs::create_dir_all(parent)?;
+    let temporary = parent.join(format!(".{file_name}.opus-overlay-{}", std::process::id()));
+    if temporary.exists() {
+        fs::remove_file(&temporary)?;
+    }
+    let result = (|| -> Result<(), NativeError> {
+        let mut output = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&temporary)?;
+        output.write_all(&bytes)?;
+        output.sync_all()?;
+        fs::rename(&temporary, destination)?;
+        make_executable(destination)?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    result?;
+    Ok(destination.to_path_buf())
+}
+
 #[cfg(unix)]
 fn make_executable(path: &Path) -> Result<(), io::Error> {
     use std::os::unix::fs::PermissionsExt;
@@ -127,6 +203,18 @@ pub enum NativeError {
     Io(#[from] io::Error),
     #[error("selected native archives did not contain any native files")]
     NoNativesExtracted,
+    #[error("native overlay entry is missing from {archive}: {entry}", archive = .archive.display())]
+    MissingOverlayEntry { archive: PathBuf, entry: String },
+    #[error(
+        "native overlay integrity mismatch for {entry}: expected {expected_sha1}/{expected_size}, got {actual_sha1}/{actual_size}"
+    )]
+    OverlayIntegrityMismatch {
+        entry: String,
+        expected_sha1: String,
+        actual_sha1: String,
+        expected_size: u64,
+        actual_size: u64,
+    },
 }
 
 #[cfg(test)]
@@ -208,6 +296,28 @@ mod tests {
             ),
             Err(NativeError::ArchiveCollision(_))
         ));
+    }
+
+    #[test]
+    fn atomically_replaces_a_native_from_a_verified_overlay() {
+        let temp = tempfile::tempdir().unwrap();
+        let archive = temp.path().join("compat.jar");
+        write_zip(&archive, &[("liblwjgl.dylib", b"replacement")]);
+        let destination = temp.path().join("natives/liblwjgl.dylib");
+        fs::create_dir_all(destination.parent().unwrap()).unwrap();
+        fs::write(&destination, b"old").unwrap();
+
+        let expected = format!("{:x}", Sha1::digest(b"replacement"));
+        replace_native_from_archive(
+            &archive,
+            "liblwjgl.dylib",
+            &destination,
+            &expected,
+            b"replacement".len() as u64,
+        )
+        .unwrap();
+
+        assert_eq!(fs::read(destination).unwrap(), b"replacement");
     }
 
     fn write_zip(path: &Path, entries: &[(&str, &[u8])]) {
