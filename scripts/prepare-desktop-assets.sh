@@ -2,7 +2,10 @@
 set -euo pipefail
 
 opus_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-runtime_artifact_dir="${OPUS_RUNTIME_ARTIFACT_DIR:-${opus_root}/runtime-artifacts}"
+runtime_artifact_dir="${OPUS_RUNTIME_ARTIFACT_DIR:-${opus_root}/../runtime/build/runtime}"
+if [[ ! -f "${runtime_artifact_dir}/runtime-manifest.json" ]]; then
+  runtime_artifact_dir="${opus_root}/runtime-artifacts"
+fi
 bootstrap_destination="${opus_root}/desktop/src-tauri/resources/bootstrap"
 node "${opus_root}/scripts/stage-runtime-artifacts.mjs" \
   "${runtime_artifact_dir}" \

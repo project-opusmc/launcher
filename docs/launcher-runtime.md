@@ -1,5 +1,13 @@
 # Launcher runtime: install, verify, launch
 
+> **Implementation-contract notice — September 15, 2026:** when this Launcher
+> is checked out through the Opus superproject,
+> [Decision 0008](../../docs/decisions/0008-opus-client-launcher-ui-first-mainline.md)
+> makes Client + Launcher, UI first, the active product mainline. This page
+> documents current install, verification, artifact, and launch behavior. It
+> does not select a UI renderer or change the Runtime artifact contract merely
+> because UI-first work is now prioritized.
+
 Everything in this page lives in `crates/engine`, with path and platform
 support from `crates/platform`. The supported launch path is the pinned
 Forge + locally imported OptiFine 1.8.9 profile; vanilla is only the verified
@@ -205,9 +213,12 @@ split with `shlex`; every `${…}` placeholder must resolve, including Forge's
 fails with `UnresolvedPlaceholder`.
 
 **Supported launch mode: `ForgeBootstrap`.** The runtime id must equal the
-locked Forge profile, the managed OptiFine JAR must verify, and all six bundled
-Runtime artifacts must be present. The launcher:
+locked Forge profile, the managed OptiFine JAR must verify, and all seven
+bundled Runtime artifacts must be present. The launcher:
 
+- requires exactly these schema-v1 roles: `bootstrap`,
+  `runtime-legacy-1.8.9`, `lwjgl-macos-compat`, `native-ui`, `opusconfig`,
+  `elementa`, and `universalcraft`;
 - canonicalizes the single `bootstrap-*.jar` and all managed Forge/Minecraft
   classpath entries;
 - starts `org.polydevs.opusmc.bootstrap.ForgeBootstrapMain` rather than the vanilla main
@@ -215,8 +226,8 @@ Runtime artifacts must be present. The launcher:
 - sends the ordinary game arguments through stdin; and
 - verifies the OPUS Runtime coremod checksum and required `FMLCorePlugin`
   manifest, then stages it as `game/mods/opus-runtime-legacy-1.8.9.jar`;
-- verifies and stages the native UI bridge, branded OpusConfig fork, Elementa,
-  and UniversalCraft under fixed filenames;
+- verifies and stages the LWJGL macOS compatibility JAR, native UI bridge,
+  branded OpusConfig fork, Elementa, and UniversalCraft under fixed filenames;
 - removes the exact retired `game/mods/opus-client-legacy-1.8.9.jar` before
   Forge discovery; and
 - rejects an unexpected visible top-level entry in the managed `game/mods/`

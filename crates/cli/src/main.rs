@@ -5,10 +5,20 @@ use opus_engine::{
     ForgeUiArtifacts, GameIdentity, Installer, LaunchMode, LaunchOptions, LaunchPlan,
     MinecraftLayout, launch_game,
 };
+#[cfg(all(feature = "opus-owned-m3-preview", debug_assertions))]
+use opus_engine::{
+    OpusOwnedM3Preview, cleanup_opus_owned_m3_preview_control_files,
+    discard_opus_owned_m3_preview_control_files, launch_game_via_macos_app,
+    validate_macos_game_app,
+};
+#[cfg(all(feature = "opus-owned-m3-preview", debug_assertions))]
+use opus_platform::macos_console_is_locked;
 use opus_platform::{OperatingSystem, OpusPaths, Platform};
 use std::path::{Path, PathBuf};
 
 const DEFAULT_BOOTSTRAP_DIR: &str = "desktop/src-tauri/resources/bootstrap";
+#[cfg(all(feature = "opus-owned-m3-preview", debug_assertions))]
+const DEFAULT_M3_MACOS_GAME_APP: &str = "desktop/src-tauri/resources/Minecraft.app";
 
 #[derive(Debug, Parser)]
 #[command(
@@ -52,6 +62,47 @@ enum Command {
         #[arg(long, default_value = DEFAULT_BOOTSTRAP_DIR)]
         bootstrap_dir: PathBuf,
     },
+    /// Developer-only OPUS-owned M3 preview. This command exists only in a
+    /// debug build compiled with `opus-owned-m3-preview`; it is not a normal
+    /// launcher or third-party-client transport.
+    #[cfg(all(feature = "opus-owned-m3-preview", debug_assertions))]
+    OwnedM3Preview {
+        /// Required acknowledgement that this is an OPUS-owned preview target,
+        /// not a certified client integration.
+        #[arg(long)]
+        acknowledge_preview_boundary: bool,
+        /// Username used only with --offline.
+        #[arg(long, default_value = "OpusM3Dev")]
+        username: String,
+        /// Use a development identity; online-mode servers will reject it.
+        #[arg(long)]
+        offline: bool,
+        #[arg(long, default_value_t = 2048)]
+        max_memory_mib: u32,
+        /// Build a private session plan but do not start Minecraft.
+        #[arg(long)]
+        dry_run: bool,
+        #[arg(long, default_value = DEFAULT_BOOTSTRAP_DIR)]
+        bootstrap_dir: PathBuf,
+        /// The source-controlled `opus-owned-m3-bootstrap-*.jar`.
+        #[arg(long)]
+        preview_bootstrap: PathBuf,
+        /// A single same-architecture `libopus-runtime.dylib`.
+        #[arg(long)]
+        native_runtime: PathBuf,
+        /// Version recorded with the launcher-bound OPUS-owned preview build.
+        #[arg(long, default_value = "0.1.0")]
+        target_version: String,
+        #[arg(long, default_value = "0.1.0")]
+        injector_version: String,
+        #[arg(long, default_value = "0.1.0")]
+        native_runtime_version: String,
+        #[arg(long, default_value = "not-built")]
+        java_runtime_version: String,
+        /// The OPUS-owned macOS host app used to start the managed game JVM.
+        #[arg(long, default_value = DEFAULT_M3_MACOS_GAME_APP)]
+        macos_game_app: PathBuf,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -78,6 +129,36 @@ fn main() -> Result<()> {
             dry_run,
             bootstrap_dir,
         } => launch(&username, offline, max_memory_mib, dry_run, &bootstrap_dir),
+        #[cfg(all(feature = "opus-owned-m3-preview", debug_assertions))]
+        Command::OwnedM3Preview {
+            acknowledge_preview_boundary,
+            username,
+            offline,
+            max_memory_mib,
+            dry_run,
+            bootstrap_dir,
+            preview_bootstrap,
+            native_runtime,
+            target_version,
+            injector_version,
+            native_runtime_version,
+            java_runtime_version,
+            macos_game_app,
+        } => launch_owned_m3_preview(
+            acknowledge_preview_boundary,
+            &username,
+            offline,
+            max_memory_mib,
+            dry_run,
+            &bootstrap_dir,
+            preview_bootstrap,
+            native_runtime,
+            target_version,
+            injector_version,
+            native_runtime_version,
+            java_runtime_version,
+            macos_game_app,
+        ),
     }
 }
 
@@ -166,6 +247,159 @@ fn launch(
     println!("logs: {}", result.log_directory.display());
     if !result.status.success() {
         anyhow::bail!("Minecraft exited unsuccessfully");
+    }
+    Ok(())
+}
+
+#[cfg(all(feature = "opus-owned-m3-preview", debug_assertions))]
+#[allow(clippy::too_many_arguments)]
+fn launch_owned_m3_preview(
+    acknowledge_preview_boundary: bool,
+    username: &str,
+    offline: bool,
+    max_memory_mib: u32,
+    dry_run: bool,
+    bootstrap_dir: &Path,
+    preview_bootstrap: PathBuf,
+    native_runtime: PathBuf,
+    target_version: String,
+    injector_version: String,
+    native_runtime_version: String,
+    java_runtime_version: String,
+    macos_game_app: PathBuf,
+) -> Result<()> {
+    if !acknowledge_preview_boundary {
+        anyhow::bail!(
+            "Pass --acknowledge-preview-boundary to confirm this starts only an OPUS-owned M3 preview target. It does not certify or modify third-party clients."
+        );
+    }
+
+    let platform = Platform::detect()?;
+    if platform.os != OperatingSystem::MacOs {
+        anyhow::bail!(
+            "The OPUS-owned M3 preview launcher entrypoint is currently defined only for macOS."
+        );
+    }
+    // Reject an incomplete host bundle before discovering or preparing the
+    // managed game installation. `prepare` may otherwise create or update the
+    // managed rollback host before a preview can report this input error.
+    validate_macos_game_app(&macos_game_app)?;
+    if !dry_run && macos_console_is_locked()? {
+        anyhow::bail!(
+            "macOS console is locked; unlock the Mac before launching the OPUS-owned M3 preview."
+        );
+    }
+    if !platform.translation_available()? {
+        anyhow::bail!("Rosetta is required for the managed Minecraft 1.8.9 runtime on this Mac.");
+    }
+
+    let paths = OpusPaths::discover()?;
+    let layout = MinecraftLayout::new(paths);
+    let installer = Installer::new(layout.clone(), platform)?;
+    println!("Opus Launcher developer preview");
+    println!("verifying the managed Forge 1.8.9 rollback host");
+    let report = installer.prepare()?;
+
+    let identity = if offline {
+        println!("identity: offline development profile {username}");
+        GameIdentity::offline(username)?
+    } else {
+        let authenticator = MicrosoftAuthenticator::from_environment()?;
+        let store = RefreshTokenStore::new()?;
+        println!("refreshing Microsoft Minecraft session");
+        let account = authenticator.refresh_session(&store)?;
+        account.save_refresh_token(&store)?;
+        println!("identity: {}", account.session.redacted_summary());
+        GameIdentity::authenticated(
+            &account.session.username,
+            &account.session.uuid,
+            account.session.access_token.clone(),
+            &account.session.user_type,
+        )?
+    };
+
+    let artifacts = forge_bootstrap_artifacts(bootstrap_dir)?;
+    let preview = OpusOwnedM3Preview::new(
+        preview_bootstrap,
+        native_runtime,
+        target_version,
+        injector_version,
+        native_runtime_version,
+        java_runtime_version,
+    )?;
+    let mode = LaunchMode::OpusOwnedM3Preview {
+        bootstrap_jar: artifacts.bootstrap_jar,
+        lwjgl_macos_compat_jar: artifacts.ui.lwjgl_macos_compat_jar,
+        preview,
+    };
+
+    let mut instance_paths = layout.paths.clone();
+    instance_paths.game = instance_paths
+        .root
+        .join("instances")
+        .join(&identity.uuid)
+        .join("game");
+    let instance_layout = MinecraftLayout::new(instance_paths);
+    let plan = LaunchPlan::build(
+        &instance_layout,
+        platform,
+        &report.minecraft,
+        &report.java,
+        &identity,
+        &LaunchOptions {
+            max_memory_mib,
+            ..LaunchOptions::default()
+        },
+        &mode,
+    )?;
+    let session_directory = instance_layout.paths.sessions.join(&plan.session_id);
+    let descriptor = session_directory.join("opus-owned-m3-target.properties");
+    let log_directory = plan.log_directory.clone();
+    println!("mode: developer-only OPUS-owned M3 preview");
+    println!("session: {}", plan.session_id);
+    println!("private control descriptor: {}", descriptor.display());
+    println!("launch plan: {}", plan.redacted_summary());
+    if dry_run {
+        discard_opus_owned_m3_preview_control_files(&session_directory)?;
+        println!("dry run complete; game process was not started");
+        return Ok(());
+    }
+
+    println!("starting OPUS-owned preview target");
+    let launch_result = launch_game_via_macos_app(plan, &macos_game_app);
+    let cleanup_result =
+        cleanup_opus_owned_m3_preview_control_files(&session_directory, &log_directory);
+    match (launch_result, cleanup_result) {
+        (Ok(result), Ok(true)) => {
+            println!("Minecraft exited with {}", result.status);
+            println!("logs: {}", result.log_directory.display());
+            if !result.status.success() {
+                anyhow::bail!("Minecraft exited unsuccessfully");
+            }
+        }
+        (Ok(_), Ok(false)) => {
+            anyhow::bail!(
+                "The preview launcher did not confirm a terminal target state; private control files were retained."
+            );
+        }
+        (Ok(_), Err(cleanup_error)) => {
+            return Err(anyhow::Error::new(cleanup_error)
+                .context("The game ended, but private M3 control-file cleanup failed"));
+        }
+        (Err(launch_error), Ok(true)) => {
+            return Err(anyhow::Error::new(launch_error)
+                .context("The terminal preview session's private control files were removed"));
+        }
+        (Err(launch_error), Ok(false)) => {
+            return Err(anyhow::Error::new(launch_error).context(
+                "Private M3 control files were retained because the target may still be alive",
+            ));
+        }
+        (Err(launch_error), Err(cleanup_error)) => {
+            return Err(anyhow::Error::new(launch_error).context(format!(
+                "The preview launcher also failed to clean private M3 control files: {cleanup_error}"
+            )));
+        }
     }
     Ok(())
 }

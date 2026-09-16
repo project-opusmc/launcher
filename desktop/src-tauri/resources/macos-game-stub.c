@@ -275,6 +275,13 @@ int main(int argc, char *argv[]) {
         return 127;
     }
     if (activation_result != 0) {
+        // The launcher may see the user-facing failure marker while this
+        // process is still terminating Java. Publish this separate marker
+        // only after waitpid has reaped the child, so capability-bearing
+        // preview control files can be removed without racing a live JVM.
+        write_marker(
+            getenv("OPUS_GAME_WINDOW_TERMINAL_FILE"),
+            "terminated\n");
         return 78;
     }
     if (WIFEXITED(status)) {

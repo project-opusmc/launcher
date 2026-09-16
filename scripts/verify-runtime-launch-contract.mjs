@@ -252,6 +252,7 @@ for (const [role, contract, namePrefix, exactName] of required) {
     if (
       !displaySymbols.includes("OPUS_MODERN_MACOS_DISPLAY_COMPAT_V1") ||
       !displaySymbols.includes("OPUS_COCOA_LIVE_RESIZE_HANDSHAKE_V10_APPKIT_DRAWABLE_UPDATE") ||
+      !displaySymbols.includes("opus.lwjgl.macos.liveResizeGuard") ||
       !peerInfoSymbols.includes("OPUS_MODERN_MACOS_PIXEL_FORMAT_COMPAT_V2")
     ) {
       throw new Error(
@@ -283,7 +284,7 @@ for (const [role, contract, namePrefix, exactName] of required) {
       !guardIsMachO ||
       !guard
         .toString("latin1")
-        .includes("OPUS_COCOA_LIVE_RESIZE_GUARD_V9_APPKIT_DRAWABLE_UPDATE")
+        .includes("OPUS_COCOA_LIVE_RESIZE_GUARD_V10_MAIN_QUEUE_INSTALL")
     ) {
       throw new Error(
         `Embedded Cocoa live-resize guard integrity mismatch: ${artifact.file}`,

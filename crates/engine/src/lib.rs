@@ -26,6 +26,11 @@ pub use launch::{
     ForgeUiArtifacts, GameIdentity, LaunchMode, LaunchOptions, LaunchPlan, LaunchResult,
     launch_game, launch_game_via_macos_app,
 };
+#[cfg(feature = "opus-owned-m3-preview")]
+pub use launch::{
+    OpusOwnedM3Preview, cleanup_opus_owned_m3_preview_control_files,
+    discard_opus_owned_m3_preview_control_files, validate_macos_game_app,
+};
 pub use layout::{MinecraftLayout, safe_join};
 pub use model::*;
 pub use natives::{extract_natives, replace_native_from_archive};

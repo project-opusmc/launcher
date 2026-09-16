@@ -7,12 +7,23 @@ use crate::{
     FORGE_UNIVERSALCRAFT_SHA1, FORGE_UNIVERSALCRAFT_SIZE, ForgeRuntimeLock, InstalledMinecraft,
     ManagedJava, MinecraftLayout, extract_natives, replace_native_from_archive, verify_file,
 };
+#[cfg(feature = "opus-owned-m3-preview")]
+use base64::Engine;
+#[cfg(feature = "opus-owned-m3-preview")]
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+#[cfg(feature = "opus-owned-m3-preview")]
+use getrandom::fill as fill_random;
 use md5::{Digest, Md5};
 use opus_platform::{OperatingSystem, Platform};
 use serde::Serialize;
 use sha1::Sha1;
+#[cfg(feature = "opus-owned-m3-preview")]
+use sha2::Sha256;
 use std::ffi::{OsStr, OsString};
 use std::fs::{self, File, OpenOptions};
+
+#[cfg(feature = "opus-owned-m3-preview")]
+const FOUNDATION_JAVA_RUNTIME_VERSION: &str = "not-built";
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
@@ -24,7 +35,15 @@ const SESSION_MANIFEST_SCHEMA_VERSION: u32 = 1;
 const DIAGNOSTICS_SCHEMA_VERSION: u32 = 1;
 const LAUNCHER_SUMMARY_SCHEMA_VERSION: u32 = 1;
 const MACOS_GAME_WINDOW_STARTUP_TIMEOUT: Duration = Duration::from_secs(90);
+const MACOS_GAME_TERMINAL_EXIT_TIMEOUT: Duration = Duration::from_secs(10);
 const LWJGL_MACOS_JAVA_ARTIFACT_FILE_NAME: &str = "lwjgl-2.9.2-nightly-20140822.jar";
+#[cfg(feature = "opus-owned-m3-preview")]
+const OPUS_OWNED_M3_PREVIEW_MAIN_CLASS: &str =
+    "dev.opus.runtime.ownedclient.OpusOwnedM3ClientBootstrap";
+#[cfg(feature = "opus-owned-m3-preview")]
+const OPUS_OWNED_M3_CONTROL_CONFIG_FILE: &str = "opus-owned-m3-runtime-control.properties";
+#[cfg(feature = "opus-owned-m3-preview")]
+const OPUS_OWNED_M3_CONTROL_DESCRIPTOR_FILE: &str = "opus-owned-m3-target.properties";
 
 #[derive(Clone)]
 pub struct GameIdentity {
@@ -111,6 +130,60 @@ pub struct ForgeUiArtifacts {
     pub lwjgl_macos_compat_jar: PathBuf,
 }
 
+/// Immutable inputs for a source-controlled, non-default OPUS-owned M3
+/// preview launch. The preview bootstrap runs before the unchanged legacy
+/// Forge bootstrap, exposes only the loopback runtime-control endpoint, and
+/// self-loads the configured native runtime after a capability-gated request.
+#[cfg(feature = "opus-owned-m3-preview")]
+#[derive(Debug, Clone)]
+pub struct OpusOwnedM3Preview {
+    preview_bootstrap_jar: PathBuf,
+    native_runtime: PathBuf,
+    target_version: String,
+    injector_version: String,
+    native_runtime_version: String,
+    java_runtime_version: String,
+}
+
+#[cfg(feature = "opus-owned-m3-preview")]
+impl OpusOwnedM3Preview {
+    pub fn new(
+        preview_bootstrap_jar: PathBuf,
+        native_runtime: PathBuf,
+        target_version: String,
+        injector_version: String,
+        native_runtime_version: String,
+        java_runtime_version: String,
+    ) -> Result<Self, LaunchError> {
+        if !is_semantic_m3_version(&target_version) {
+            return Err(LaunchError::InvalidOpusOwnedM3Version {
+                component: "target",
+            });
+        }
+        for (component, version) in [
+            ("injector", injector_version.as_str()),
+            ("native runtime", native_runtime_version.as_str()),
+        ] {
+            if !is_safe_m3_version(version) {
+                return Err(LaunchError::InvalidOpusOwnedM3Version { component });
+            }
+        }
+        if java_runtime_version != FOUNDATION_JAVA_RUNTIME_VERSION {
+            return Err(LaunchError::InvalidOpusOwnedM3Version {
+                component: "Java runtime",
+            });
+        }
+        Ok(Self {
+            preview_bootstrap_jar,
+            native_runtime,
+            target_version,
+            injector_version,
+            native_runtime_version,
+            java_runtime_version,
+        })
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum LaunchMode {
     /// Forge owns Minecraft's class loader. The small Opus bootstrap keeps
@@ -121,6 +194,18 @@ pub enum LaunchMode {
         bootstrap_jar: PathBuf,
         coremod_jar: PathBuf,
         ui: ForgeUiArtifacts,
+    },
+    /// An explicit, source-controlled M3 preview target. This does not alter
+    /// the normal Forge release lane or its locked artifact contract.
+    #[cfg(feature = "opus-owned-m3-preview")]
+    OpusOwnedM3Preview {
+        bootstrap_jar: PathBuf,
+        /// The sealed macOS compatibility layer remains part of the preview
+        /// host because Java 8/LWJGL 2 needs it to start on current macOS.
+        /// The preview disables only its live-resize guard; it does not stage
+        /// a legacy Opus Core Mod or native UI artifact.
+        lwjgl_macos_compat_jar: PathBuf,
+        preview: OpusOwnedM3Preview,
     },
 }
 
@@ -317,14 +402,18 @@ impl LaunchPlan {
             prefixed_path_argument("-Dorg.lwjgl.librarypath=", &natives_directory),
             prefixed_path_argument("-Dnet.java.games.input.librarypath=", &natives_directory),
             prefixed_path_argument("-Dopus.diagnostics.file=", &diagnostics_path),
-            OsString::from(format!("-Dopus.native.ui.session={session_id}")),
-            OsString::from("-Dopus.native.ui.enabled=true"),
-            OsString::from("-Dopus.native.ui.requireOptifine=true"),
             prefixed_path_argument("-Xloggc:", &gc_log_path),
             OsString::from("-XX:+PrintGCDetails"),
             OsString::from("-XX:+PrintGCDateStamps"),
             prefixed_path_argument("-XX:ErrorFile=", &log_directory.join("jvm_crash_%p.log")),
         ]);
+        if matches!(mode, LaunchMode::ForgeBootstrap { .. }) {
+            jvm_arguments.extend([
+                OsString::from(format!("-Dopus.native.ui.session={session_id}")),
+                OsString::from("-Dopus.native.ui.enabled=true"),
+                OsString::from("-Dopus.native.ui.requireOptifine=true"),
+            ]);
+        }
         if let Some(utility_settings_file) = &options.utility_settings_file {
             jvm_arguments.push(prefixed_path_argument(
                 "-Dopus.utility.settings.file=",
@@ -361,11 +450,22 @@ impl LaunchPlan {
             ]);
         }
 
-        let LaunchMode::ForgeBootstrap {
-            bootstrap_jar,
-            coremod_jar,
-            ui,
-        } = mode;
+        let (bootstrap_jar, lwjgl_macos_compat_jar) = match mode {
+            LaunchMode::ForgeBootstrap {
+                bootstrap_jar, ui, ..
+            } => (bootstrap_jar, &ui.lwjgl_macos_compat_jar),
+            #[cfg(feature = "opus-owned-m3-preview")]
+            LaunchMode::OpusOwnedM3Preview {
+                bootstrap_jar,
+                lwjgl_macos_compat_jar,
+                ..
+            } => (bootstrap_jar, lwjgl_macos_compat_jar),
+        };
+        #[cfg(feature = "opus-owned-m3-preview")]
+        let owned_m3_preview = match mode {
+            LaunchMode::ForgeBootstrap { .. } => None,
+            LaunchMode::OpusOwnedM3Preview { preview, .. } => Some(preview),
+        };
         let pinned_contract = if forge_contract.is_none() {
             Some(ForgeLaunchContract::pinned()?)
         } else {
@@ -379,74 +479,82 @@ impl LaunchPlan {
                 minecraft.runtime_id.clone(),
             ));
         }
-        let optifine_jar = minecraft
-            .optifine_jar
-            .as_deref()
-            .ok_or(LaunchError::OptiFineRequired)?;
-        let staged_optifine = stage_forge_optifine(layout, optifine_jar, &contract.optifine)?;
-        let staged_coremod = stage_forge_coremod(layout, coremod_jar, &contract.coremod)?;
-        let staged_native_ui = stage_forge_ui_artifact(
-            layout,
-            &ui.native_ui_jar,
-            &contract.native_ui,
-            "opus-native-ui-1.8.9-0.1.0.jar",
-        )?;
-        let staged_opusconfig = stage_forge_ui_artifact(
-            layout,
-            &ui.opusconfig_jar,
-            &contract.opusconfig,
-            "opus-oneconfig-1.8.9-forge-0.2.2-alpha228-full.jar",
-        )?;
-        let staged_elementa = stage_forge_ui_artifact(
-            layout,
-            &ui.elementa_jar,
-            &contract.elementa,
-            "opus-elementa-762.jar",
-        )?;
-        let staged_universalcraft = stage_forge_ui_artifact(
-            layout,
-            &ui.universalcraft_jar,
-            &contract.universalcraft,
-            "opus-universalcraft-1.8.9-forge-516.jar",
-        )?;
+        match mode {
+            LaunchMode::ForgeBootstrap {
+                coremod_jar, ui, ..
+            } => {
+                let optifine_jar = minecraft
+                    .optifine_jar
+                    .as_deref()
+                    .ok_or(LaunchError::OptiFineRequired)?;
+                let staged_optifine =
+                    stage_forge_optifine(layout, optifine_jar, &contract.optifine)?;
+                let staged_coremod = stage_forge_coremod(layout, coremod_jar, &contract.coremod)?;
+                let staged_native_ui = stage_forge_ui_artifact(
+                    layout,
+                    &ui.native_ui_jar,
+                    &contract.native_ui,
+                    "opus-native-ui-1.8.9-0.1.0.jar",
+                )?;
+                let staged_opusconfig = stage_forge_ui_artifact(
+                    layout,
+                    &ui.opusconfig_jar,
+                    &contract.opusconfig,
+                    "opus-oneconfig-1.8.9-forge-0.2.2-alpha228-full.jar",
+                )?;
+                let staged_elementa = stage_forge_ui_artifact(
+                    layout,
+                    &ui.elementa_jar,
+                    &contract.elementa,
+                    "opus-elementa-762.jar",
+                )?;
+                let staged_universalcraft = stage_forge_ui_artifact(
+                    layout,
+                    &ui.universalcraft_jar,
+                    &contract.universalcraft,
+                    "opus-universalcraft-1.8.9-forge-516.jar",
+                )?;
+                remove_retired_forge_client_mod(layout)?;
+                validate_managed_forge_mods(
+                    layout,
+                    &[
+                        staged_optifine.as_path(),
+                        staged_coremod.as_path(),
+                        staged_native_ui.as_path(),
+                        staged_opusconfig.as_path(),
+                        staged_elementa.as_path(),
+                        staged_universalcraft.as_path(),
+                    ],
+                )?;
+            }
+            #[cfg(feature = "opus-owned-m3-preview")]
+            LaunchMode::OpusOwnedM3Preview { .. } => {
+                prepare_opus_owned_m3_preview_mods(layout)?;
+            }
+        }
         let lwjgl_macos_compat = if platform.os == OperatingSystem::MacOs {
             validate_forge_lwjgl_compat_artifact(
-                &ui.lwjgl_macos_compat_jar,
+                lwjgl_macos_compat_jar,
                 &contract.lwjgl_macos_compat,
             )?;
             replace_native_from_archive(
-                &ui.lwjgl_macos_compat_jar,
+                lwjgl_macos_compat_jar,
                 "liblwjgl.dylib",
                 &natives_directory.join("liblwjgl.dylib"),
                 FORGE_LWJGL_MACOS_NATIVE_SHA1,
                 FORGE_LWJGL_MACOS_NATIVE_SIZE,
             )?;
             replace_native_from_archive(
-                &ui.lwjgl_macos_compat_jar,
+                lwjgl_macos_compat_jar,
                 FORGE_LWJGL_RESIZE_GUARD_FILE_NAME,
                 &natives_directory.join(FORGE_LWJGL_RESIZE_GUARD_FILE_NAME),
                 FORGE_LWJGL_RESIZE_GUARD_SHA1,
                 FORGE_LWJGL_RESIZE_GUARD_SIZE,
             )?;
-            Some(
-                canonicalize_classpath(std::slice::from_ref(&ui.lwjgl_macos_compat_jar))?[0]
-                    .clone(),
-            )
+            Some(canonicalize_classpath(std::slice::from_ref(lwjgl_macos_compat_jar))?[0].clone())
         } else {
             None
         };
-        remove_retired_forge_client_mod(layout)?;
-        validate_managed_forge_mods(
-            layout,
-            &[
-                staged_optifine.as_path(),
-                staged_coremod.as_path(),
-                staged_native_ui.as_path(),
-                staged_opusconfig.as_path(),
-                staged_elementa.as_path(),
-                staged_universalcraft.as_path(),
-            ],
-        )?;
 
         let bootstrap = canonicalize_single_bootstrap_jar(bootstrap_jar)?;
         let mut game_classpath = canonicalize_classpath(&minecraft.classpath)?;
@@ -457,7 +565,26 @@ impl LaunchPlan {
             // before OneConfig reopens the org.lwjgl loader exception.
             game_classpath.retain(|entry| !is_pinned_lwjgl_macos_java_artifact(entry));
         }
-        let mut system_classpath = Vec::with_capacity(game_classpath.len() + 2);
+        let mut system_classpath = Vec::with_capacity(game_classpath.len() + 3);
+        #[cfg(feature = "opus-owned-m3-preview")]
+        let owned_m3_control = owned_m3_preview
+            .map(|preview| {
+                let preview_bootstrap =
+                    canonicalize_opus_owned_m3_preview_bootstrap(&preview.preview_bootstrap_jar)?;
+                let control_config =
+                    write_opus_owned_m3_control_config(&session_directory, platform, preview)?;
+                Ok::<(PathBuf, PathBuf), LaunchError>((preview_bootstrap, control_config))
+            })
+            .transpose()?;
+        #[cfg(feature = "opus-owned-m3-preview")]
+        if let Some((preview_bootstrap, control_config)) = &owned_m3_control {
+            jvm_arguments.push(prefixed_path_argument(
+                "-Dopus.m3.runtime-control.config=",
+                control_config,
+            ));
+            jvm_arguments.push(OsString::from("-Dopus.lwjgl.macos.liveResizeGuard=false"));
+            system_classpath.push(preview_bootstrap.clone());
+        }
         system_classpath.push(bootstrap);
         if let Some(compatibility_jar) = lwjgl_macos_compat {
             jvm_arguments.push(OsString::from("-Dopus.lwjgl.macos.compat=true"));
@@ -466,6 +593,13 @@ impl LaunchPlan {
         system_classpath.extend(game_classpath);
         let game_arguments = vec![OsString::from("--opus-game-arguments-stdin")];
         let stdin_payload = Some(encode_game_arguments(&vanilla_arguments)?);
+        #[cfg(feature = "opus-owned-m3-preview")]
+        let main_class = if owned_m3_control.is_some() {
+            OPUS_OWNED_M3_PREVIEW_MAIN_CLASS.to_owned()
+        } else {
+            "org.polydevs.opusmc.bootstrap.ForgeBootstrapMain".to_owned()
+        };
+        #[cfg(not(feature = "opus-owned-m3-preview"))]
         let main_class = "org.polydevs.opusmc.bootstrap.ForgeBootstrapMain".to_owned();
         let classpath = std::env::join_paths(&system_classpath)
             .map_err(|source| LaunchError::InvalidClasspath(source.to_string()))?;
@@ -559,6 +693,8 @@ fn write_json_private<T: Serialize>(path: &Path, value: &T) -> Result<(), Launch
 fn launch_mode_name(mode: &LaunchMode) -> &'static str {
     match mode {
         LaunchMode::ForgeBootstrap { .. } => "forge-bootstrap",
+        #[cfg(feature = "opus-owned-m3-preview")]
+        LaunchMode::OpusOwnedM3Preview { .. } => "opus-owned-m3-preview",
     }
 }
 
@@ -604,6 +740,140 @@ fn canonicalize_single_bootstrap_jar(path: &Path) -> Result<PathBuf, LaunchError
         path: path.to_path_buf(),
         source,
     })
+}
+
+#[cfg(feature = "opus-owned-m3-preview")]
+fn canonicalize_opus_owned_m3_preview_bootstrap(path: &Path) -> Result<PathBuf, LaunchError> {
+    if !path.is_file() {
+        return Err(LaunchError::MissingOpusOwnedM3PreviewBootstrap(
+            path.to_path_buf(),
+        ));
+    }
+    let name = path.file_name().and_then(OsStr::to_str).unwrap_or_default();
+    if !name.starts_with("opus-owned-m3-bootstrap-") || !name.ends_with(".jar") {
+        return Err(LaunchError::InvalidOpusOwnedM3PreviewBootstrap(
+            path.to_path_buf(),
+        ));
+    }
+    fs::canonicalize(path).map_err(|source| LaunchError::CanonicalizeClasspath {
+        path: path.to_path_buf(),
+        source,
+    })
+}
+
+#[cfg(feature = "opus-owned-m3-preview")]
+fn write_opus_owned_m3_control_config(
+    session_directory: &Path,
+    platform: Platform,
+    preview: &OpusOwnedM3Preview,
+) -> Result<PathBuf, LaunchError> {
+    let client_build =
+        canonicalize_opus_owned_m3_preview_bootstrap(&preview.preview_bootstrap_jar)?;
+    let native_runtime = fs::canonicalize(&preview.native_runtime).map_err(|source| {
+        LaunchError::MissingOpusOwnedM3Runtime {
+            path: preview.native_runtime.clone(),
+            source,
+        }
+    })?;
+    if !native_runtime.is_file()
+        || native_runtime.file_name().and_then(OsStr::to_str) != Some("libopus-runtime.dylib")
+    {
+        return Err(LaunchError::InvalidOpusOwnedM3Runtime(
+            preview.native_runtime.clone(),
+        ));
+    }
+
+    let target_architecture = match platform.game_arch {
+        opus_platform::Architecture::Aarch64 => "arm64",
+        opus_platform::Architecture::X86_64 => "x86_64",
+        opus_platform::Architecture::X86 => {
+            return Err(LaunchError::UnsupportedOpusOwnedM3Architecture);
+        }
+    };
+    let config_path = session_directory.join(OPUS_OWNED_M3_CONTROL_CONFIG_FILE);
+    let descriptor_path = session_directory.join(OPUS_OWNED_M3_CONTROL_DESCRIPTOR_FILE);
+    let capability = new_opus_owned_m3_capability()?;
+    let client_build_sha256 = sha256_file(&client_build)?;
+    let native_runtime_sha256 = sha256_file(&native_runtime)?;
+    let contents = format!(
+        "protocolVersion=1\n\
+         targetKind=opus-owned-client\n\
+         targetVersion={}\n\
+         clientBuild={}\n\
+         clientBuildSha256={client_build_sha256}\n\
+         injectorVersion={}\n\
+         nativeRuntimeVersion={}\n\
+         javaRuntimeVersion={}\n\
+         targetArchitecture={target_architecture}\n\
+         descriptor={}\n\
+         capability={capability}\n\
+         allowedRuntime={}\n\
+         allowedRuntimeSha256={native_runtime_sha256}\n",
+        preview.target_version,
+        path_text(&client_build)?,
+        preview.injector_version,
+        preview.native_runtime_version,
+        preview.java_runtime_version,
+        path_text(&descriptor_path)?,
+        path_text(&native_runtime)?,
+    );
+    create_private_file(&config_path, contents.as_bytes())?;
+    Ok(config_path)
+}
+
+#[cfg(feature = "opus-owned-m3-preview")]
+fn new_opus_owned_m3_capability() -> Result<String, LaunchError> {
+    let mut bytes = [0u8; 48];
+    fill_random(&mut bytes)
+        .map_err(|error| LaunchError::OpusOwnedM3CapabilityGeneration(error.to_string()))?;
+    Ok(URL_SAFE_NO_PAD.encode(bytes))
+}
+
+#[cfg(feature = "opus-owned-m3-preview")]
+fn sha256_file(path: &Path) -> Result<String, LaunchError> {
+    let mut file = File::open(path)?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0u8; 8192];
+    loop {
+        let read = file.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+#[cfg(feature = "opus-owned-m3-preview")]
+fn is_safe_m3_version(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 64
+        && value.bytes().any(|byte| byte.is_ascii_digit())
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'+'))
+}
+
+#[cfg(feature = "opus-owned-m3-preview")]
+fn is_semantic_m3_version(value: &str) -> bool {
+    let (core, suffix) = match value.find(['-', '+']) {
+        Some(index) => (&value[..index], Some(&value[index + 1..])),
+        None => (value, None),
+    };
+    let mut components = core.split('.');
+    let has_three_numeric_components = (0..3).all(|_| {
+        components.next().is_some_and(|component| {
+            !component.is_empty() && component.bytes().all(|byte| byte.is_ascii_digit())
+        })
+    }) && components.next().is_none();
+    has_three_numeric_components
+        && suffix.is_none_or(|suffix| {
+            !suffix.is_empty()
+                && suffix.len() <= 64
+                && suffix
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-'))
+        })
 }
 
 fn validate_forge_optifine(path: &Path, spec: &crate::DownloadSpec) -> Result<(), LaunchError> {
@@ -873,7 +1143,9 @@ fn validate_forge_lwjgl_compat_artifact(
     if !String::from_utf8_lossy(&display_patch_bytes)
         .contains("OPUS_MODERN_MACOS_DISPLAY_COMPAT_V1")
         || !String::from_utf8_lossy(&display_patch_bytes)
-        .contains("OPUS_COCOA_LIVE_RESIZE_HANDSHAKE_V10_APPKIT_DRAWABLE_UPDATE")
+            .contains("OPUS_COCOA_LIVE_RESIZE_HANDSHAKE_V10_APPKIT_DRAWABLE_UPDATE")
+        || !String::from_utf8_lossy(&display_patch_bytes)
+            .contains("opus.lwjgl.macos.liveResizeGuard")
     {
         return Err(LaunchError::InvalidLwjglMacosCompat(path.to_path_buf()));
     }
@@ -908,7 +1180,7 @@ fn validate_forge_lwjgl_compat_artifact(
         || !guard_sha1.eq_ignore_ascii_case(FORGE_LWJGL_RESIZE_GUARD_SHA1)
         || !guard_is_x86_64_mach_o
         || !String::from_utf8_lossy(&guard_bytes)
-            .contains("OPUS_COCOA_LIVE_RESIZE_GUARD_V9_APPKIT_DRAWABLE_UPDATE")
+            .contains("OPUS_COCOA_LIVE_RESIZE_GUARD_V10_MAIN_QUEUE_INSTALL")
     {
         return Err(LaunchError::InvalidLwjglMacosCompat(path.to_path_buf()));
     }
@@ -1006,6 +1278,42 @@ fn remove_retired_forge_client_mod(layout: &MinecraftLayout) -> Result<(), Launc
     }
 }
 
+/// The M3 preview host must not inherit legacy OPUS behavior. It starts the
+/// managed Forge runtime only to keep the current game process lifecycle
+/// stable, while the source-controlled preview bootstrap owns the M3 control
+/// endpoint. Remove only the known managed artifacts and reject any other
+/// entry rather than silently launching against an unknown mod set.
+#[cfg(feature = "opus-owned-m3-preview")]
+fn prepare_opus_owned_m3_preview_mods(layout: &MinecraftLayout) -> Result<(), LaunchError> {
+    let mods_directory = layout.mods_dir();
+    fs::create_dir_all(&mods_directory)?;
+    for file_name in [
+        crate::FORGE_OPTIFINE_FILE_NAME,
+        "opus-runtime-legacy-1.8.9.jar",
+        "opus-native-ui-1.8.9-0.1.0.jar",
+        "opus-oneconfig-1.8.9-forge-0.2.2-alpha228-full.jar",
+        "opus-elementa-762.jar",
+        "opus-universalcraft-1.8.9-forge-516.jar",
+        "opus-client-legacy-1.8.9.jar",
+    ] {
+        remove_opus_owned_m3_preview_mod(&mods_directory.join(file_name))?;
+    }
+    validate_managed_forge_mods(layout, &[])
+}
+
+#[cfg(feature = "opus-owned-m3-preview")]
+fn remove_opus_owned_m3_preview_mod(path: &Path) -> Result<(), LaunchError> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_file() => {
+            fs::remove_file(path)?;
+            Ok(())
+        }
+        Ok(_) => Err(LaunchError::UnmanagedForgeMod(path.to_path_buf())),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(LaunchError::Io(error)),
+    }
+}
+
 #[derive(Debug)]
 pub struct LaunchResult {
     pub status: ExitStatus,
@@ -1016,6 +1324,88 @@ pub struct LaunchResult {
 pub fn launch_game(plan: LaunchPlan) -> Result<LaunchResult, LaunchError> {
     let java_executable = plan.java_executable.clone();
     launch_game_inner(plan, java_executable, Vec::new())
+}
+
+/// Removes the exact capability-bearing control files created for a preview
+/// plan that never starts a JVM, such as a CLI dry run. The caller supplies a
+/// launcher-created session directory; this function never traverses beyond
+/// the two fixed file names.
+#[cfg(feature = "opus-owned-m3-preview")]
+pub fn discard_opus_owned_m3_preview_control_files(
+    session_directory: &Path,
+) -> Result<(), LaunchError> {
+    for name in [
+        OPUS_OWNED_M3_CONTROL_CONFIG_FILE,
+        OPUS_OWNED_M3_CONTROL_DESCRIPTOR_FILE,
+    ] {
+        remove_opus_owned_m3_preview_control_file(&session_directory.join(name))?;
+    }
+    Ok(())
+}
+
+/// Removes the capability-bearing preview control files only after the
+/// launcher has evidence that the selected game process has reached a
+/// terminal lifecycle state. When the process may still be alive, the files
+/// remain untouched so the live target is never stranded mid-session.
+#[cfg(feature = "opus-owned-m3-preview")]
+pub fn cleanup_opus_owned_m3_preview_control_files(
+    session_directory: &Path,
+    log_directory: &Path,
+) -> Result<bool, LaunchError> {
+    if !opus_owned_m3_preview_target_is_terminal(log_directory)? {
+        return Ok(false);
+    }
+    discard_opus_owned_m3_preview_control_files(session_directory)?;
+    Ok(true)
+}
+
+#[cfg(feature = "opus-owned-m3-preview")]
+fn opus_owned_m3_preview_target_is_terminal(log_directory: &Path) -> Result<bool, LaunchError> {
+    // The macOS host writes this marker only after it has reaped a Java child
+    // that failed before the bootstrap could publish a lifecycle state.
+    if macos_game_window_terminal(log_directory).is_file() {
+        return Ok(true);
+    }
+    let status_path = log_directory.join("game.status");
+    if matches!(
+        fs::read_to_string(&status_path)
+            .ok()
+            .as_deref()
+            .map(str::trim),
+        Some("exited" | "terminated" | "failed")
+    ) {
+        return Ok(true);
+    }
+    if find_macos_jvm_crash_marker(log_directory)?.is_some() {
+        return Ok(true);
+    }
+
+    let pid_path = log_directory.join("game.pid");
+    let raw_pid = match fs::read_to_string(pid_path) {
+        Ok(raw_pid) => raw_pid,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error.into()),
+    };
+    let pid = match raw_pid.trim().parse::<u32>().ok().filter(|pid| *pid > 1) {
+        Some(pid) => pid,
+        None => return Ok(false),
+    };
+    Ok(!macos_game_process_is_alive(pid)?)
+}
+
+#[cfg(feature = "opus-owned-m3-preview")]
+fn remove_opus_owned_m3_preview_control_file(path: &Path) -> Result<(), LaunchError> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_file() => {
+            fs::remove_file(path)?;
+            Ok(())
+        }
+        Ok(_) => Err(LaunchError::InvalidOpusOwnedM3ControlFile(
+            path.to_path_buf(),
+        )),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error.into()),
+    }
 }
 
 /// Starts the managed JVM through a minimal LaunchServices app bundle on macOS.
@@ -1037,6 +1427,7 @@ pub fn launch_game_via_macos_app(
     let status_path = plan.log_directory.join("game.status");
     let window_ready_path = plan.log_directory.join("game.window.ready");
     let window_failure_path = plan.log_directory.join("game.window.failure");
+    let window_terminal_path = plan.log_directory.join("game.window.terminal");
     insert_jvm_argument_before_classpath(
         &mut plan.jvm_arguments,
         OsString::from(format!("-Dopus.game.statusFile={}", status_path.display())),
@@ -1070,6 +1461,7 @@ pub fn launch_game_via_macos_app(
                 &plan.game_arguments,
                 &window_ready_path,
                 &window_failure_path,
+                &window_terminal_path,
             ))
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -1167,6 +1559,7 @@ fn macos_open_arguments(
     game_arguments: &[OsString],
     window_ready_path: &Path,
     window_failure_path: &Path,
+    window_terminal_path: &Path,
 ) -> Vec<OsString> {
     let mut working_directory_environment = OsString::from("OPUS_GAME_WORKDIR=");
     working_directory_environment.push(working_directory);
@@ -1189,6 +1582,11 @@ fn macos_open_arguments(
         OsString::from(format!(
             "OPUS_GAME_WINDOW_FAILURE_FILE={}",
             window_failure_path.display()
+        )),
+        OsString::from("--env"),
+        OsString::from(format!(
+            "OPUS_GAME_WINDOW_TERMINAL_FILE={}",
+            window_terminal_path.display()
         )),
         game_app.as_os_str().to_owned(),
         OsString::from("--args"),
@@ -1213,6 +1611,8 @@ fn wait_for_macos_game_lifecycle(status_path: &Path) -> Result<String, LaunchErr
             }
             "exited" | "terminated" => {
                 ensure_macos_window_did_not_fail(log_directory)?;
+                wait_for_macos_terminal_process_exit(log_directory)?;
+                check_macos_jvm_crash_marker(log_directory)?;
                 if !macos_game_window_ready(log_directory).is_file() {
                     return Err(LaunchError::MacosGameWindowNotReady);
                 }
@@ -1276,12 +1676,28 @@ fn macos_game_window_failure(log_directory: &Path) -> PathBuf {
     log_directory.join("game.window.failure")
 }
 
+fn macos_game_window_terminal(log_directory: &Path) -> PathBuf {
+    log_directory.join("game.window.terminal")
+}
+
 fn ensure_macos_window_did_not_fail(log_directory: &Path) -> Result<(), LaunchError> {
     let failure = macos_game_window_failure(log_directory);
     if failure.is_file() {
+        // The host writes the visible failure marker before it terminates its
+        // Java child. Wait briefly for its post-reap terminal marker so the
+        // preview cleanup path never removes a live target's capability.
+        wait_for_macos_window_failure_terminal(log_directory);
         return Err(LaunchError::MacosGameWindowActivationFailed(failure));
     }
     Ok(())
+}
+
+fn wait_for_macos_window_failure_terminal(log_directory: &Path) {
+    let terminal = macos_game_window_terminal(log_directory);
+    let deadline = Instant::now() + MACOS_GAME_TERMINAL_EXIT_TIMEOUT;
+    while !terminal.is_file() && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(50));
+    }
 }
 
 fn wait_for_macos_game_exit(
@@ -1293,6 +1709,8 @@ fn wait_for_macos_game_exit(
         match game_status.as_str() {
             "exited" | "terminated" => {
                 ensure_macos_window_did_not_fail(log_directory)?;
+                wait_for_macos_terminal_process_exit(log_directory)?;
+                check_macos_jvm_crash_marker(log_directory)?;
                 return Ok(game_status);
             }
             "failed" => return Err(LaunchError::MacosGameFailed),
@@ -1334,6 +1752,32 @@ fn check_macos_game_health(status_path: &Path, log_directory: &Path) -> Result<(
         return Err(LaunchError::MacosGameProcessExited(pid));
     }
     Ok(())
+}
+
+/// A Java shutdown hook can publish `terminated` before the native JVM has
+/// actually finished exiting. Wait for the recorded target PID to disappear,
+/// then inspect the fatal-error marker once more so a late native crash cannot
+/// be reported as a clean launcher exit.
+fn wait_for_macos_terminal_process_exit(log_directory: &Path) -> Result<(), LaunchError> {
+    let pid_path = log_directory.join("game.pid");
+    let raw_pid = match fs::read_to_string(&pid_path) {
+        Ok(raw_pid) => raw_pid,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    let pid = match raw_pid.trim().parse::<u32>().ok().filter(|pid| *pid > 1) {
+        Some(pid) => pid,
+        None => return Ok(()),
+    };
+    let deadline = Instant::now() + MACOS_GAME_TERMINAL_EXIT_TIMEOUT;
+    while macos_game_process_is_alive(pid)? {
+        check_macos_jvm_crash_marker(log_directory)?;
+        if Instant::now() >= deadline {
+            return Err(LaunchError::MacosGameTerminalProcessDidNotExit(pid));
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    check_macos_jvm_crash_marker(log_directory)
 }
 
 fn check_macos_jvm_crash_marker(log_directory: &Path) -> Result<(), LaunchError> {
@@ -1639,7 +2083,9 @@ fn restrict_private_file_permissions(_: &Path) -> Result<(), io::Error> {
     Ok(())
 }
 
-fn validate_macos_game_app(game_app: &Path) -> Result<(), LaunchError> {
+/// Validates the minimal macOS host bundle before launcher setup creates a
+/// session or changes the managed game installation.
+pub fn validate_macos_game_app(game_app: &Path) -> Result<(), LaunchError> {
     let executable = game_app.join("Contents/MacOS/Minecraft");
     if !game_app.is_dir() || !executable.is_file() {
         return Err(LaunchError::MacosGameAppMissing(game_app.to_path_buf()));
@@ -1850,6 +2296,34 @@ pub enum LaunchError {
     MissingBootstrapJar,
     #[error("bootstrap classpath entry does not exist: {path}", path = .0.display())]
     MissingBootstrapEntry(PathBuf),
+    #[cfg(feature = "opus-owned-m3-preview")]
+    #[error("OPUS-owned M3 preview bootstrap is missing: {}", .0.display())]
+    MissingOpusOwnedM3PreviewBootstrap(PathBuf),
+    #[cfg(feature = "opus-owned-m3-preview")]
+    #[error("OPUS-owned M3 preview bootstrap has an invalid filename: {}", .0.display())]
+    InvalidOpusOwnedM3PreviewBootstrap(PathBuf),
+    #[cfg(feature = "opus-owned-m3-preview")]
+    #[error("OPUS-owned M3 native runtime is missing: {path}", path = .path.display())]
+    MissingOpusOwnedM3Runtime {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[cfg(feature = "opus-owned-m3-preview")]
+    #[error("OPUS-owned M3 native runtime is invalid: {}", .0.display())]
+    InvalidOpusOwnedM3Runtime(PathBuf),
+    #[cfg(feature = "opus-owned-m3-preview")]
+    #[error("OPUS-owned M3 preview requires an arm64 or x86_64 game JVM")]
+    UnsupportedOpusOwnedM3Architecture,
+    #[cfg(feature = "opus-owned-m3-preview")]
+    #[error("OPUS-owned M3 preview {component} version is invalid")]
+    InvalidOpusOwnedM3Version { component: &'static str },
+    #[cfg(feature = "opus-owned-m3-preview")]
+    #[error("unable to generate an OPUS-owned M3 control capability: {0}")]
+    OpusOwnedM3CapabilityGeneration(String),
+    #[cfg(feature = "opus-owned-m3-preview")]
+    #[error("OPUS-owned M3 control artifact is not a regular file: {}", .0.display())]
+    InvalidOpusOwnedM3ControlFile(PathBuf),
     #[error("Forge launch requires the pinned Forge + OptiFine runtime, got {0}")]
     ForgeRuntimeRequired(String),
     #[error("Forge launch requires an imported OptiFine 1.8.9 HD U M5 JAR")]
@@ -1930,6 +2404,8 @@ pub enum LaunchError {
     MacosGamePidInvalid(PathBuf),
     #[error("Minecraft process {0} exited without updating its lifecycle status")]
     MacosGameProcessExited(u32),
+    #[error("Minecraft published a terminal lifecycle status but process {0} did not exit")]
+    MacosGameTerminalProcessDidNotExit(u32),
     #[error("Minecraft window was not visible when the game lifecycle ended")]
     MacosGameWindowNotReady,
     #[error("Minecraft window did not become visible before the startup deadline")]
@@ -2208,6 +2684,26 @@ mod tests {
     }
 
     #[test]
+    fn macos_game_app_validation_requires_the_bundle_executable() {
+        let temporary = tempfile::tempdir().unwrap();
+        let game_app = temporary.path().join("Minecraft.app");
+
+        assert!(matches!(
+            validate_macos_game_app(&game_app),
+            Err(LaunchError::MacosGameAppMissing(path)) if path == game_app
+        ));
+
+        fs::create_dir_all(game_app.join("Contents/MacOS")).unwrap();
+        fs::write(
+            game_app.join("Contents/MacOS/Minecraft"),
+            b"host app fixture",
+        )
+        .unwrap();
+
+        validate_macos_game_app(&game_app).unwrap();
+    }
+
+    #[test]
     fn macos_launchservices_arguments_do_not_wait_for_an_exec_replaced_stub() {
         let arguments = macos_open_arguments(
             Path::new("/tmp/stdin"),
@@ -2221,12 +2717,16 @@ mod tests {
             &[OsString::from("--opus-game-arguments-stdin")],
             Path::new("/tmp/game.window.ready"),
             Path::new("/tmp/game.window.failure"),
+            Path::new("/tmp/game.window.terminal"),
         );
 
         assert!(arguments.contains(&OsString::from("-n")));
         assert!(!arguments.contains(&OsString::from("-W")));
         assert!(arguments.contains(&OsString::from("--stdin")));
         assert!(arguments.contains(&OsString::from("--args")));
+        assert!(arguments.contains(&OsString::from(
+            "OPUS_GAME_WINDOW_TERMINAL_FILE=/tmp/game.window.terminal"
+        )));
     }
 
     #[test]
@@ -2240,6 +2740,21 @@ mod tests {
             wait_for_macos_game_lifecycle(&status_path).unwrap(),
             "exited"
         );
+    }
+
+    #[test]
+    fn macos_lifecycle_rejects_a_native_jvm_crash_marker_after_terminal_status() {
+        let temporary = tempfile::tempdir().unwrap();
+        let status_path = temporary.path().join("game.status");
+        let crash_path = temporary.path().join("jvm_crash_1234.log");
+        fs::write(&status_path, "terminated\n").unwrap();
+        fs::write(temporary.path().join("game.window.ready"), "ready\n").unwrap();
+        fs::write(&crash_path, "fatal native error\n").unwrap();
+
+        assert!(matches!(
+            wait_for_macos_game_lifecycle(&status_path),
+            Err(LaunchError::MacosGameNativeCrash(path)) if path == crash_path
+        ));
     }
 
     #[test]
@@ -2261,6 +2776,11 @@ mod tests {
         let failure_path = temporary.path().join("game.window.failure");
         fs::write(&status_path, "starting\n").unwrap();
         fs::write(&failure_path, "macOS console is locked\n").unwrap();
+        fs::write(
+            temporary.path().join("game.window.terminal"),
+            "terminated\n",
+        )
+        .unwrap();
 
         assert!(matches!(
             wait_for_macos_game_lifecycle(&status_path),
@@ -2653,6 +3173,238 @@ mod tests {
             ],
         )
         .unwrap();
+    }
+
+    #[cfg(feature = "opus-owned-m3-preview")]
+    #[test]
+    fn owned_m3_preview_plan_is_private_first_in_classpath_and_keeps_forge_unchanged() {
+        let fixture = ForgeFixture::new();
+        let identity = GameIdentity::offline("ForgeFixture").unwrap();
+
+        let normal_mode = fixture.mode();
+        let normal_plan = LaunchPlan::build_with_forge_contract(
+            fixture.request(&identity, &normal_mode),
+            Some(&fixture.contract),
+        )
+        .unwrap();
+        assert_eq!(
+            normal_plan.main_class,
+            "org.polydevs.opusmc.bootstrap.ForgeBootstrapMain"
+        );
+        assert!(!normal_plan.jvm_arguments.iter().any(|argument| {
+            argument
+                .to_string_lossy()
+                .starts_with("-Dopus.m3.runtime-control.config=")
+        }));
+        assert_eq!(
+            system_classpath(&normal_plan),
+            vec![
+                fs::canonicalize(&fixture.bootstrap_jar).unwrap(),
+                fs::canonicalize(&fixture.minecraft.classpath[0]).unwrap(),
+                fs::canonicalize(&fixture.minecraft.classpath[1]).unwrap(),
+            ]
+        );
+
+        let preview_bootstrap = fixture
+            ._temporary
+            .path()
+            .join("opus-owned-m3-bootstrap-0.1.0.jar");
+        let native_runtime = fixture._temporary.path().join("libopus-runtime.dylib");
+        fs::write(&preview_bootstrap, b"owned M3 preview bootstrap fixture").unwrap();
+        fs::write(&native_runtime, b"owned M3 native runtime fixture").unwrap();
+        let preview = OpusOwnedM3Preview::new(
+            preview_bootstrap.clone(),
+            native_runtime.clone(),
+            "0.1.0".to_owned(),
+            "0.1.0".to_owned(),
+            "0.1.0".to_owned(),
+            FOUNDATION_JAVA_RUNTIME_VERSION.to_owned(),
+        )
+        .unwrap();
+        let preview_mode = LaunchMode::OpusOwnedM3Preview {
+            bootstrap_jar: fixture.bootstrap_jar.clone(),
+            lwjgl_macos_compat_jar: fixture.lwjgl_macos_compat_jar.clone(),
+            preview,
+        };
+        let plan = LaunchPlan::build_with_forge_contract(
+            fixture.request(&identity, &preview_mode),
+            Some(&fixture.contract),
+        )
+        .unwrap();
+
+        assert_eq!(plan.main_class, OPUS_OWNED_M3_PREVIEW_MAIN_CLASS);
+        assert!(plan.jvm_arguments.iter().any(|argument| {
+            argument
+                .to_string_lossy()
+                .eq("-Dopus.lwjgl.macos.liveResizeGuard=false")
+        }));
+        assert!(
+            !plan
+                .jvm_arguments
+                .iter()
+                .any(|argument| { argument.to_string_lossy().starts_with("-Dopus.native.ui.") })
+        );
+        assert_eq!(
+            system_classpath(&plan),
+            vec![
+                fs::canonicalize(&preview_bootstrap).unwrap(),
+                fs::canonicalize(&fixture.bootstrap_jar).unwrap(),
+                fs::canonicalize(&fixture.minecraft.classpath[0]).unwrap(),
+                fs::canonicalize(&fixture.minecraft.classpath[1]).unwrap(),
+            ]
+        );
+        assert!(
+            fs::read_dir(fixture.layout.mods_dir())
+                .unwrap()
+                .next()
+                .is_none(),
+            "M3 preview must remove the legacy Forge/Core-Mod/UI set"
+        );
+
+        let control_config_argument = plan
+            .jvm_arguments
+            .iter()
+            .map(|argument| argument.to_string_lossy())
+            .find(|argument| argument.starts_with("-Dopus.m3.runtime-control.config="))
+            .expect("preview mode must pass a private control configuration");
+        let control_config = PathBuf::from(
+            control_config_argument
+                .strip_prefix("-Dopus.m3.runtime-control.config=")
+                .unwrap(),
+        );
+        let expected_session_directory = fixture.layout.paths.sessions.join(&plan.session_id);
+        assert_eq!(
+            control_config.parent(),
+            Some(expected_session_directory.as_path())
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            assert_eq!(
+                fs::metadata(&control_config).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+
+        let configuration = fs::read_to_string(&control_config).unwrap();
+        let capability = configuration
+            .lines()
+            .find_map(|line| line.strip_prefix("capability="))
+            .expect("preview configuration must contain a per-session capability");
+        assert!((32..=128).contains(&capability.len()));
+        assert_eq!(
+            configuration,
+            format!(
+                "protocolVersion=1\n\
+                 targetKind=opus-owned-client\n\
+                 targetVersion=0.1.0\n\
+                 clientBuild={}\n\
+                 clientBuildSha256={}\n\
+                 injectorVersion=0.1.0\n\
+                 nativeRuntimeVersion=0.1.0\n\
+                 javaRuntimeVersion=not-built\n\
+                 targetArchitecture=x86_64\n\
+                 descriptor={}\n\
+                 capability={capability}\n\
+                 allowedRuntime={}\n\
+                 allowedRuntimeSha256={}\n",
+                fs::canonicalize(&preview_bootstrap).unwrap().display(),
+                sha256_file(&preview_bootstrap).unwrap(),
+                expected_session_directory
+                    .join(OPUS_OWNED_M3_CONTROL_DESCRIPTOR_FILE)
+                    .display(),
+                fs::canonicalize(&native_runtime).unwrap().display(),
+                sha256_file(&native_runtime).unwrap(),
+            )
+        );
+
+        let manifest =
+            fs::read_to_string(plan.log_directory.join("session-manifest.json")).unwrap();
+        assert!(manifest.contains("\"launch_mode\": \"opus-owned-m3-preview\""));
+        assert!(!manifest.contains(capability));
+        assert!(!manifest.contains("runtime-control.config"));
+        assert!(!plan.redacted_summary().contains(capability));
+
+        write_launch_log(&plan, Path::new("/fixture/macos-game-entrypoint")).unwrap();
+        let launch_log = fs::read_to_string(plan.log_directory.join("launcher.log")).unwrap();
+        assert!(!launch_log.contains(capability));
+        assert!(!launch_log.contains("runtime-control.config"));
+    }
+
+    #[cfg(feature = "opus-owned-m3-preview")]
+    #[test]
+    fn owned_m3_preview_cleanup_removes_only_fixed_control_files_after_terminal_state() {
+        let temporary = tempfile::tempdir().unwrap();
+        let session_directory = temporary.path().join("session");
+        let log_directory = temporary.path().join("logs");
+        create_private_directory(&session_directory).unwrap();
+        create_private_directory(&log_directory).unwrap();
+        let config = session_directory.join(OPUS_OWNED_M3_CONTROL_CONFIG_FILE);
+        let descriptor = session_directory.join(OPUS_OWNED_M3_CONTROL_DESCRIPTOR_FILE);
+        let retained = session_directory.join("retained.txt");
+        create_private_file(&config, b"private config\n").unwrap();
+        create_private_file(&descriptor, b"private descriptor\n").unwrap();
+        create_private_file(&retained, b"retain\n").unwrap();
+        create_private_file(&log_directory.join("game.status"), b"failed\n").unwrap();
+
+        assert!(
+            cleanup_opus_owned_m3_preview_control_files(&session_directory, &log_directory)
+                .unwrap()
+        );
+        assert!(!config.exists());
+        assert!(!descriptor.exists());
+        assert_eq!(fs::read(retained).unwrap(), b"retain\n");
+    }
+
+    #[cfg(feature = "opus-owned-m3-preview")]
+    #[test]
+    fn owned_m3_preview_cleanup_removes_control_files_after_host_reaps_startup_failure() {
+        let temporary = tempfile::tempdir().unwrap();
+        let session_directory = temporary.path().join("session");
+        let log_directory = temporary.path().join("logs");
+        create_private_directory(&session_directory).unwrap();
+        create_private_directory(&log_directory).unwrap();
+        let config = session_directory.join(OPUS_OWNED_M3_CONTROL_CONFIG_FILE);
+        let descriptor = session_directory.join(OPUS_OWNED_M3_CONTROL_DESCRIPTOR_FILE);
+        create_private_file(&config, b"private config\n").unwrap();
+        create_private_file(&descriptor, b"private descriptor\n").unwrap();
+        create_private_file(&log_directory.join("game.status"), b"starting\n").unwrap();
+        create_private_file(
+            &log_directory.join("game.window.failure"),
+            b"macOS console is locked\n",
+        )
+        .unwrap();
+        create_private_file(&log_directory.join("game.window.terminal"), b"terminated\n").unwrap();
+
+        assert!(
+            cleanup_opus_owned_m3_preview_control_files(&session_directory, &log_directory)
+                .unwrap()
+        );
+        assert!(!config.exists());
+        assert!(!descriptor.exists());
+    }
+
+    #[cfg(feature = "opus-owned-m3-preview")]
+    #[test]
+    fn owned_m3_preview_cleanup_preserves_control_files_while_target_state_is_not_terminal() {
+        let temporary = tempfile::tempdir().unwrap();
+        let session_directory = temporary.path().join("session");
+        let log_directory = temporary.path().join("logs");
+        create_private_directory(&session_directory).unwrap();
+        create_private_directory(&log_directory).unwrap();
+        let config = session_directory.join(OPUS_OWNED_M3_CONTROL_CONFIG_FILE);
+        let descriptor = session_directory.join(OPUS_OWNED_M3_CONTROL_DESCRIPTOR_FILE);
+        create_private_file(&config, b"private config\n").unwrap();
+        create_private_file(&descriptor, b"private descriptor\n").unwrap();
+        create_private_file(&log_directory.join("game.status"), b"running\n").unwrap();
+
+        assert!(
+            !cleanup_opus_owned_m3_preview_control_files(&session_directory, &log_directory)
+                .unwrap()
+        );
+        assert!(config.exists());
+        assert!(descriptor.exists());
     }
 
     #[test]

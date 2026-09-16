@@ -3,13 +3,12 @@ use opus_engine::{
     ForgeUiArtifacts, GameIdentity, InstallProgress, Installer, LaunchMode, LaunchOptions,
     LaunchPlan, MinecraftLayout, launch_game as launch_direct_game, launch_game_via_macos_app,
 };
-use opus_platform::{OperatingSystem, OpusPaths, Platform};
+use opus_platform::{OperatingSystem, OpusPaths, Platform, macos_console_is_locked};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::MutexGuard;
 use std::sync::{Arc, Mutex};
 use tauri::Manager;
@@ -1504,52 +1503,12 @@ fn macos_game_launch_readiness(app: &AppHandle) -> (bool, String) {
             true,
             format!("Packaged game launcher ready: {}", path.display()),
         ),
-        Err(error) => (false, error),
+        Err(error) => (false, error.to_string()),
     }
 }
 
 fn contains_binary_marker(bytes: &[u8], marker: &[u8]) -> bool {
     !marker.is_empty() && bytes.windows(marker.len()).any(|window| window == marker)
-}
-
-#[cfg(target_os = "macos")]
-fn macos_console_is_locked() -> Result<bool, String> {
-    let output = Command::new("/usr/sbin/ioreg")
-        .args(["-n", "Root", "-d1", "-a"])
-        .output()
-        .map_err(display_error)?;
-    if !output.status.success() {
-        return Err(format!(
-            "Could not inspect macOS console lock state (ioreg exited with {})",
-            output.status
-        ));
-    }
-    let document = String::from_utf8_lossy(&output.stdout);
-    let console_locked = ioreg_boolean(&document, "IOConsoleLocked");
-    let session_locked = ioreg_boolean(&document, "CGSSessionScreenIsLocked");
-    match (console_locked, session_locked) {
-        (Some(console), Some(session)) => Ok(console || session),
-        (Some(console), None) => Ok(console),
-        (None, Some(session)) => Ok(session),
-        (None, None) => Err("Could not determine macOS console lock state".to_owned()),
-    }
-}
-
-#[cfg(not(target_os = "macos"))]
-fn macos_console_is_locked() -> Result<bool, String> {
-    Ok(false)
-}
-
-fn ioreg_boolean(document: &str, key: &str) -> Option<bool> {
-    let marker = format!("<key>{key}</key>");
-    let value = document.split(&marker).nth(1)?.trim_start();
-    if value.starts_with("<true") {
-        Some(true)
-    } else if value.starts_with("<false") {
-        Some(false)
-    } else {
-        None
-    }
 }
 
 fn launcher_resource_path(
@@ -1756,18 +1715,6 @@ mod tests {
             "Minecraft - [OFFICIAL] zvwgvx"
         );
         assert_eq!(instance_display_label("", "zvwgvx"), "Minecraft - zvwgvx");
-    }
-
-    #[test]
-    fn ioreg_boolean_reads_true_and_false_values() {
-        let document =
-            "<key>IOConsoleLocked</key>\n<true/>\n<key>CGSSessionScreenIsLocked</key>\n<false/>";
-        assert_eq!(ioreg_boolean(document, "IOConsoleLocked"), Some(true));
-        assert_eq!(
-            ioreg_boolean(document, "CGSSessionScreenIsLocked"),
-            Some(false)
-        );
-        assert_eq!(ioreg_boolean(document, "missing"), None);
     }
 
     #[test]

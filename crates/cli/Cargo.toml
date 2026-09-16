@@ -9,6 +9,12 @@ license.workspace = true
 name = "opus"
 path = "src/main.rs"
 
+[features]
+# This only forwards the non-default engine feature. The command itself is
+# additionally compiled only for debug builds, so release CLI/UI artifacts
+# cannot expose the OPUS-owned M3 preview lane.
+opus-owned-m3-preview = ["opus-engine/opus-owned-m3-preview"]
+
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true

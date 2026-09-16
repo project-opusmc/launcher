@@ -10,10 +10,10 @@ pub const FORGE_OPTIFINE_FILE_NAME: &str = "OptiFine_1.8.9_HD_U_M5.jar";
 /// cannot produce a build that installs successfully but cannot launch.
 pub const FORGE_COREMOD_SHA1: &str = "d9ad2df678638eaede0b1a7da7f5be6dc5f6237c";
 pub const FORGE_COREMOD_SIZE: u64 = 60_299;
-pub const FORGE_NATIVE_UI_SHA1: &str = "afa7fe7f942f0cb8ce6262fe93ec5c12962bdf47";
-pub const FORGE_NATIVE_UI_SIZE: u64 = 74_224;
-pub const FORGE_OPUSCONFIG_SHA1: &str = "449a59fe8fe31ee539ceb5271d3b6a9d11eea5e6";
-pub const FORGE_OPUSCONFIG_SIZE: u64 = 17_903_948;
+pub const FORGE_NATIVE_UI_SHA1: &str = "cf912fab5ee3927971adee0e6b9ab24ac96be28a";
+pub const FORGE_NATIVE_UI_SIZE: u64 = 236_809;
+pub const FORGE_OPUSCONFIG_SHA1: &str = "c8ecca07b53c82c656f7f854502a3c4a607cca5a";
+pub const FORGE_OPUSCONFIG_SIZE: u64 = 17_903_862;
 pub const FORGE_ELEMENTA_SHA1: &str = "6d1814ea202546b644d810e52ec36efac9179d0c";
 pub const FORGE_ELEMENTA_SIZE: u64 = 2_508_054;
 pub const FORGE_UNIVERSALCRAFT_SHA1: &str = "9fe699e5b9c8525fbef0d105dd0015cb23dd8d6d";
@@ -22,16 +22,16 @@ pub const FORGE_UNIVERSALCRAFT_SIZE: u64 = 249_305;
 /// stock pixel-format request, bypasses the obsolete display-mode query, and
 /// coalesces native Cocoa live-resize geometry without blocking AppKit on a
 /// full Minecraft frame for every intermediate mouse position.
-pub const FORGE_LWJGL_MACOS_COMPAT_SHA1: &str = "ebf4ad011097791489f0da1a41be78bd81bef37b";
-pub const FORGE_LWJGL_MACOS_COMPAT_SIZE: u64 = 1_199_766;
+pub const FORGE_LWJGL_MACOS_COMPAT_SHA1: &str = "1798902532ab2bf3ee72b3011426823f17b7a1c8";
+pub const FORGE_LWJGL_MACOS_COMPAT_SIZE: u64 = 1_200_327;
 /// The verified 2.9.2 nightly universal native with the obsolete AppKit
 /// surface-update callback disabled. The Java/render thread owns the final
 /// drawable update after the live-resize handshake.
 pub const FORGE_LWJGL_MACOS_NATIVE_SHA1: &str = "9ade823779dae4be29556dc39ed28b42ba5508e1";
 pub const FORGE_LWJGL_MACOS_NATIVE_SIZE: u64 = 838_892;
 pub const FORGE_LWJGL_RESIZE_GUARD_FILE_NAME: &str = "libopus_lwjgl_resize_guard.dylib";
-pub const FORGE_LWJGL_RESIZE_GUARD_SHA1: &str = "290bf81664ee45a3f699f11ef658724be94a05de";
-pub const FORGE_LWJGL_RESIZE_GUARD_SIZE: u64 = 15_224;
+pub const FORGE_LWJGL_RESIZE_GUARD_SHA1: &str = "b80da68bc3de6c8823bcfdee42d660a90246a09f";
+pub const FORGE_LWJGL_RESIZE_GUARD_SIZE: u64 = 15_696;
 
 const FORGE_LOCK_JSON: &str = include_str!("../runtime-lock/forge-1.8.9-11.15.1.2318.lock.json");
 
@@ -188,12 +188,12 @@ mod tests {
         assert_eq!(FORGE_COREMOD_SIZE, 60_299);
         assert_eq!(
             FORGE_LWJGL_MACOS_COMPAT_SHA1,
-            "ebf4ad011097791489f0da1a41be78bd81bef37b"
+            "1798902532ab2bf3ee72b3011426823f17b7a1c8"
         );
-        assert_eq!(FORGE_LWJGL_MACOS_COMPAT_SIZE, 1_199_766);
+        assert_eq!(FORGE_LWJGL_MACOS_COMPAT_SIZE, 1_200_327);
         assert_eq!(
             FORGE_LWJGL_RESIZE_GUARD_SHA1,
-            "290bf81664ee45a3f699f11ef658724be94a05de"
+            "b80da68bc3de6c8823bcfdee42d660a90246a09f"
         );
     }
 }

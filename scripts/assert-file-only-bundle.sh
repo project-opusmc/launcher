@@ -186,20 +186,26 @@ if ! unzip -p "${lwjgl_macos_compat}" org/lwjgl/opengl/MacOSXDisplay.class \
   echo "file-only bundle check: LWJGL Cocoa live-resize handshake is missing: ${lwjgl_macos_compat}" >&2
   exit 1
 fi
+if ! unzip -p "${lwjgl_macos_compat}" org/lwjgl/opengl/MacOSXDisplay.class \
+  | strings \
+  | rg -F 'opus.lwjgl.macos.liveResizeGuard' >/dev/null; then
+  echo "file-only bundle check: LWJGL preview resize-guard opt-out is missing: ${lwjgl_macos_compat}" >&2
+  exit 1
+fi
 if ! unzip -Z1 "${lwjgl_macos_compat}" | rg -x 'libopus_lwjgl_resize_guard\.dylib' > /dev/null; then
   echo "file-only bundle check: Cocoa live-resize guard is missing: ${lwjgl_macos_compat}" >&2
   exit 1
 fi
 guard_sha1="$(unzip -p "${lwjgl_macos_compat}" libopus_lwjgl_resize_guard.dylib | shasum -a 1 | awk '{print $1}')"
 guard_size="$(unzip -p "${lwjgl_macos_compat}" libopus_lwjgl_resize_guard.dylib | wc -c | tr -d '[:space:]')"
-if [[ "${guard_sha1}" != "290bf81664ee45a3f699f11ef658724be94a05de" ]] \
-  || [[ "${guard_size}" != "15224" ]]; then
+if [[ "${guard_sha1}" != "b80da68bc3de6c8823bcfdee42d660a90246a09f" ]] \
+  || [[ "${guard_size}" != "15696" ]]; then
   echo "file-only bundle check: Cocoa live-resize guard failed its integrity contract: ${lwjgl_macos_compat}" >&2
   exit 1
 fi
 if ! unzip -p "${lwjgl_macos_compat}" libopus_lwjgl_resize_guard.dylib \
   | strings \
-  | rg -F 'OPUS_COCOA_LIVE_RESIZE_GUARD_V9_APPKIT_DRAWABLE_UPDATE' >/dev/null; then
+  | rg -F 'OPUS_COCOA_LIVE_RESIZE_GUARD_V10_MAIN_QUEUE_INSTALL' >/dev/null; then
   echo "file-only bundle check: Cocoa live-resize guard marker is missing: ${lwjgl_macos_compat}" >&2
   exit 1
 fi

@@ -151,6 +151,51 @@ impl Platform {
     }
 }
 
+/// Reports whether the active macOS console is locked. Non-macOS platforms do
+/// not expose this launch boundary and therefore report `false`.
+pub fn macos_console_is_locked() -> Result<bool, PlatformError> {
+    #[cfg(target_os = "macos")]
+    {
+        let output = Command::new("/usr/sbin/ioreg")
+            .args(["-n", "Root", "-d1", "-a"])
+            .output()
+            .map_err(PlatformError::MacosConsoleLockProbeFailed)?;
+        if !output.status.success() {
+            return Err(PlatformError::MacosConsoleLockProbeExited(
+                output.status.to_string(),
+            ));
+        }
+
+        let document = String::from_utf8_lossy(&output.stdout);
+        let console_locked = ioreg_boolean(&document, "IOConsoleLocked");
+        let session_locked = ioreg_boolean(&document, "CGSSessionScreenIsLocked");
+        match (console_locked, session_locked) {
+            (Some(console), Some(session)) => Ok(console || session),
+            (Some(console), None) => Ok(console),
+            (None, Some(session)) => Ok(session),
+            (None, None) => Err(PlatformError::MacosConsoleLockStateUnavailable),
+        }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        Ok(false)
+    }
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn ioreg_boolean(document: &str, key: &str) -> Option<bool> {
+    let marker = format!("<key>{key}</key>");
+    let value = document.split(&marker).nth(1)?.trim_start();
+    if value.starts_with("<true") {
+        Some(true)
+    } else if value.starts_with("<false") {
+        Some(false)
+    } else {
+        None
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OpusPaths {
     pub root: PathBuf,
@@ -387,6 +432,12 @@ pub enum PlatformError {
     InvalidJavaVersion(String),
     #[error("failed to probe the host translation layer")]
     TranslationProbeFailed(#[source] std::io::Error),
+    #[error("failed to inspect macOS console lock state")]
+    MacosConsoleLockProbeFailed(#[source] std::io::Error),
+    #[error("could not inspect macOS console lock state (ioreg exited with {0})")]
+    MacosConsoleLockProbeExited(String),
+    #[error("could not determine macOS console lock state")]
+    MacosConsoleLockStateUnavailable,
 }
 
 #[cfg(test)]
@@ -434,5 +485,17 @@ mod tests {
             parse_java_architecture("aarch64").unwrap(),
             Architecture::Aarch64
         );
+    }
+
+    #[test]
+    fn ioreg_boolean_reads_true_and_false_values() {
+        let document =
+            "<key>IOConsoleLocked</key>\n<true/>\n<key>CGSSessionScreenIsLocked</key>\n<false/>";
+        assert_eq!(ioreg_boolean(document, "IOConsoleLocked"), Some(true));
+        assert_eq!(
+            ioreg_boolean(document, "CGSSessionScreenIsLocked"),
+            Some(false)
+        );
+        assert_eq!(ioreg_boolean(document, "missing"), None);
     }
 }

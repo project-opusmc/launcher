@@ -6,6 +6,13 @@ artifact verification, isolated game instances, and Minecraft process
 lifecycle. Java code that runs inside Minecraft belongs to the separate
 `project-opusmc/runtime` repository.
 
+> **Product-direction notice — September 15, 2026:** in the Opus superproject,
+> [Decision 0008](../docs/decisions/0008-opus-client-launcher-ui-first-mainline.md)
+> makes Opus Client + Opus Launcher, UI first, the active mainline. This
+> Launcher remains the product's desktop surface, but the artifact, staging,
+> and launch behavior documented below are the current implementation baseline;
+> no UI-first delivery or runtime-contract change is claimed here.
+
 This repository is independently buildable. In product releases it is pinned
 as the `launcher/` submodule of the `project-opusmc/opus` superproject.
 

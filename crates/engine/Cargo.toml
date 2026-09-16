@@ -9,10 +9,14 @@ license.workspace = true
 # Quarantined historical UI-preview source. No supported launcher runner or
 # production check selects this feature.
 ui-preview-artifact = []
+# Source-controlled, non-default M3 target profile. Product launch paths do
+# not enable this feature; it exists only for the isolated OPUS-owned preview.
+opus-owned-m3-preview = []
 
 [dependencies]
 base64.workspace = true
 fs2.workspace = true
+getrandom.workspace = true
 md5.workspace = true
 rayon.workspace = true
 opus-platform = { path = "../platform" }
@@ -21,6 +25,7 @@ reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha1.workspace = true
+sha2.workspace = true
 shlex.workspace = true
 thiserror.workspace = true
 url.workspace = true
