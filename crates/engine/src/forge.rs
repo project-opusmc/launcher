@@ -10,10 +10,10 @@ pub const FORGE_OPTIFINE_FILE_NAME: &str = "OptiFine_1.8.9_HD_U_M5.jar";
 /// cannot produce a build that installs successfully but cannot launch.
 pub const FORGE_COREMOD_SHA1: &str = "d9ad2df678638eaede0b1a7da7f5be6dc5f6237c";
 pub const FORGE_COREMOD_SIZE: u64 = 60_299;
-pub const FORGE_NATIVE_UI_SHA1: &str = "cf912fab5ee3927971adee0e6b9ab24ac96be28a";
-pub const FORGE_NATIVE_UI_SIZE: u64 = 236_809;
-pub const FORGE_OPUSCONFIG_SHA1: &str = "c8ecca07b53c82c656f7f854502a3c4a607cca5a";
-pub const FORGE_OPUSCONFIG_SIZE: u64 = 17_903_862;
+pub const FORGE_NATIVE_UI_SHA1: &str = "8e90289b36646759c5a79f41cfd95ca6d28ef3bf";
+pub const FORGE_NATIVE_UI_SIZE: u64 = 237_249;
+pub const FORGE_OPUSCONFIG_SHA1: &str = "7b7c304a5a9f25373baa6fca59df311f1baeec1c";
+pub const FORGE_OPUSCONFIG_SIZE: u64 = 17_903_955;
 pub const FORGE_ELEMENTA_SHA1: &str = "6d1814ea202546b644d810e52ec36efac9179d0c";
 pub const FORGE_ELEMENTA_SIZE: u64 = 2_508_054;
 pub const FORGE_UNIVERSALCRAFT_SHA1: &str = "9fe699e5b9c8525fbef0d105dd0015cb23dd8d6d";
