@@ -8,8 +8,8 @@ pub const FORGE_OPTIFINE_FILE_NAME: &str = "OptiFine_1.8.9_HD_U_M5.jar";
 /// The reproducible Opus coremod artifact staged beside the desktop launcher.
 /// The unified launcher always uses these reviewed bytes so artifact drift
 /// cannot produce a build that installs successfully but cannot launch.
-pub const FORGE_COREMOD_SHA1: &str = "d9ad2df678638eaede0b1a7da7f5be6dc5f6237c";
-pub const FORGE_COREMOD_SIZE: u64 = 60_299;
+pub const FORGE_COREMOD_SHA1: &str = "3656626a481a87e27abfeb02c204ba96b6093c41";
+pub const FORGE_COREMOD_SIZE: u64 = 66_155;
 pub const FORGE_NATIVE_UI_SHA1: &str = "d5879627429a39f8ba853d0095feeb114789baf6";
 pub const FORGE_NATIVE_UI_SIZE: u64 = 486_061;
 /// The sealed LWJGL 2.9.2 compatibility artifact. It preserves Minecraft's
@@ -177,9 +177,9 @@ mod tests {
         assert_eq!(lock.optifine.size, 2_585_014);
         assert_eq!(
             FORGE_COREMOD_SHA1,
-            "d9ad2df678638eaede0b1a7da7f5be6dc5f6237c"
+            "3656626a481a87e27abfeb02c204ba96b6093c41"
         );
-        assert_eq!(FORGE_COREMOD_SIZE, 60_299);
+        assert_eq!(FORGE_COREMOD_SIZE, 66_155);
         assert_eq!(
             FORGE_LWJGL_MACOS_COMPAT_SHA1,
             "1798902532ab2bf3ee72b3011426823f17b7a1c8"
