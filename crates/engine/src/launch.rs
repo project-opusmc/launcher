@@ -404,6 +404,10 @@ impl LaunchPlan {
                 OsString::from("-Dopus.native.ui.enabled=true"),
                 OsString::from("-Dopus.native.ui.requireOptifine=true"),
                 OsString::from("-Dopus.client.ui.enabled=true"),
+                prefixed_path_argument(
+                    "-Dopus.control.file=",
+                    &session_directory.join("control.json"),
+                ),
             ]);
         }
         let webview_helper_app = match mode {
@@ -687,7 +691,10 @@ fn platform_jvm_arguments(os: OperatingSystem) -> Vec<OsString> {
         // implementation keeps display work on its normal game/render path;
         // native Cocoa resize notifications no longer update the GL context
         // asynchronously, so the flag is not needed here.
-        OperatingSystem::MacOs => vec![OsString::from("-Xdock:name=Minecraft")],
+        OperatingSystem::MacOs => vec![
+            OsString::from("-Xdock:name=Minecraft"),
+            OsString::from("-Dorg.lwjgl.opengl.Display.enableHighDPI=true"),
+        ],
         OperatingSystem::Windows | OperatingSystem::Linux => Vec::new(),
     }
 }
@@ -2772,7 +2779,10 @@ mod tests {
     fn macos_jvm_arguments_keep_the_verified_lwjgl_launch_contract() {
         assert_eq!(
             platform_jvm_arguments(OperatingSystem::MacOs),
-            vec![OsString::from("-Xdock:name=Minecraft")]
+            vec![
+                OsString::from("-Xdock:name=Minecraft"),
+                OsString::from("-Dorg.lwjgl.opengl.Display.enableHighDPI=true"),
+            ]
         );
         assert!(platform_jvm_arguments(OperatingSystem::Windows).is_empty());
         assert!(platform_jvm_arguments(OperatingSystem::Linux).is_empty());
@@ -3188,6 +3198,16 @@ mod tests {
             plan.jvm_arguments
                 .contains(&OsString::from("-Dopus.client.ui.enabled=true"))
         );
+        assert!(plan.jvm_arguments.contains(&OsString::from(format!(
+            "-Dopus.control.file={}",
+            fixture
+                .layout
+                .paths
+                .sessions
+                .join(&plan.session_id)
+                .join("control.json")
+                .display()
+        ))));
         assert!(
             plan.jvm_arguments
                 .contains(&OsString::from("-Dopus.native.ui.requireOptifine=true"))
