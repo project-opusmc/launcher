@@ -7,6 +7,7 @@
 /desktop/src-tauri/resources/game-app/Contents/MacOS/Opus Client
 /desktop/src-tauri/resources/bootstrap/*.jar
 /desktop/src-tauri/resources/bootstrap/runtime-*.json
+/desktop/src-tauri/resources/bootstrap/opus-webview-helper.app/
 !/desktop/src-tauri/resources/bootstrap/.gitkeep
 /desktop/src-tauri/resources/opus-webview-helper.app/
 /runtime-artifacts/

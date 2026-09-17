@@ -1544,12 +1544,19 @@ fn forge_bootstrap_artifacts(directory: &Path) -> Result<ForgeBootstrapArtifacts
     let mut bootstrap_jar = None;
     let mut coremod_jar = None;
     let mut native_ui_jar = None;
-    let mut opusconfig_jar = None;
-    let mut elementa_jar = None;
-    let mut universalcraft_jar = None;
+    let mut webview_helper_app = None;
     let mut lwjgl_macos_compat_jar = None;
     for entry in fs::read_dir(directory).map_err(display_error)? {
         let path = entry.map_err(display_error)?.path();
+        if path.file_name().and_then(|value| value.to_str()) == Some("opus-webview-helper.app") {
+            if !path.is_dir() || webview_helper_app.replace(path).is_some() {
+                return Err(
+                    "Opus bootstrap directory contains an invalid or duplicate Web Surface helper"
+                        .to_owned(),
+                );
+            }
+            continue;
+        }
         if path.extension().and_then(|value| value.to_str()) != Some("jar") {
             continue;
         }
@@ -1580,20 +1587,8 @@ fn forge_bootstrap_artifacts(directory: &Path) -> Result<ForgeBootstrapArtifacts
             }
         } else if name == "opus-native-ui-1.8.9-0.1.0.jar" {
             if native_ui_jar.replace(path).is_some() {
-                return Err("Opus bootstrap directory contains multiple native UI JARs".to_owned());
-            }
-        } else if name == "opus-oneconfig-1.8.9-forge-0.2.2-alpha228-full.jar" {
-            if opusconfig_jar.replace(path).is_some() {
-                return Err("Opus bootstrap directory contains multiple OpusConfig JARs".to_owned());
-            }
-        } else if name == "opus-elementa-762.jar" {
-            if elementa_jar.replace(path).is_some() {
-                return Err("Opus bootstrap directory contains multiple Elementa JARs".to_owned());
-            }
-        } else if name == "opus-universalcraft-1.8.9-forge-516.jar" {
-            if universalcraft_jar.replace(path).is_some() {
                 return Err(
-                    "Opus bootstrap directory contains multiple UniversalCraft JARs".to_owned(),
+                    "Opus bootstrap directory contains multiple Web Surface client JARs".to_owned(),
                 );
             }
         } else if name == "opus-lwjgl-macos-compat-2.9.2-nightly-20140822.jar" {
@@ -1618,14 +1613,10 @@ fn forge_bootstrap_artifacts(directory: &Path) -> Result<ForgeBootstrapArtifacts
         })?,
         ui: ForgeUiArtifacts {
             native_ui_jar: native_ui_jar.ok_or_else(|| {
-                "Opus native UI JAR is missing. Reinstall Opus Launcher.".to_owned()
+                "Opus Web Surface client JAR is missing. Reinstall Opus Launcher.".to_owned()
             })?,
-            opusconfig_jar: opusconfig_jar
-                .ok_or_else(|| "OpusConfig JAR is missing. Reinstall Opus Launcher.".to_owned())?,
-            elementa_jar: elementa_jar
-                .ok_or_else(|| "Elementa JAR is missing. Reinstall Opus Launcher.".to_owned())?,
-            universalcraft_jar: universalcraft_jar.ok_or_else(|| {
-                "UniversalCraft JAR is missing. Reinstall Opus Launcher.".to_owned()
+            webview_helper_app: webview_helper_app.ok_or_else(|| {
+                "Opus Web Surface helper is missing. Reinstall Opus Launcher.".to_owned()
             })?,
             lwjgl_macos_compat_jar: lwjgl_macos_compat_jar.ok_or_else(|| {
                 "LWJGL compatibility JAR is missing. Reinstall Opus Launcher.".to_owned()

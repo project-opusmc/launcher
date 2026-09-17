@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Historical CEF-only gate. The canonical production path is now
-# Forge + OptiFine + the native Elementa/OpusConfig UI set, so this script must
+# Forge + OptiFine + the Web Surface V2 runtime, so this script must
 # never start a web helper, observe securityd, or exercise a credential store.
 echo "Retired CEF gate: disabled by the native-UI runtime contract; no helper was launched." >&2
 exit 78

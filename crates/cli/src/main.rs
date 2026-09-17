@@ -206,7 +206,7 @@ fn launch(
     };
 
     let artifacts = forge_bootstrap_artifacts(bootstrap_dir)?;
-    println!("mode: Forge + OptiFine + Elementa shell + OpusConfig");
+    println!("mode: Forge + OptiFine + Web Surface V2");
     let mode = LaunchMode::ForgeBootstrap {
         bootstrap_jar: artifacts.bootstrap_jar,
         coremod_jar: artifacts.coremod_jar,
@@ -459,12 +459,18 @@ fn forge_bootstrap_artifacts(directory: &Path) -> Result<ForgeBootstrapArtifacts
     let mut bootstrap_jar = None;
     let mut coremod_jar = None;
     let mut native_ui_jar = None;
-    let mut opusconfig_jar = None;
-    let mut elementa_jar = None;
-    let mut universalcraft_jar = None;
+    let mut webview_helper_app = None;
     let mut lwjgl_macos_compat_jar = None;
     for entry in std::fs::read_dir(directory)? {
         let path = entry?.path();
+        if path.file_name().and_then(|value| value.to_str()) == Some("opus-webview-helper.app") {
+            if !path.is_dir() || webview_helper_app.replace(path).is_some() {
+                anyhow::bail!(
+                    "bootstrap directory contains an invalid or duplicate Web Surface helper"
+                );
+            }
+            continue;
+        }
         if path.extension().and_then(|value| value.to_str()) != Some("jar") {
             continue;
         }
@@ -488,19 +494,7 @@ fn forge_bootstrap_artifacts(directory: &Path) -> Result<ForgeBootstrapArtifacts
             }
         } else if name == "opus-native-ui-1.8.9-0.1.0.jar" {
             if native_ui_jar.replace(path).is_some() {
-                anyhow::bail!("bootstrap directory contains multiple native UI JARs");
-            }
-        } else if name == "opus-oneconfig-1.8.9-forge-0.2.2-alpha228-full.jar" {
-            if opusconfig_jar.replace(path).is_some() {
-                anyhow::bail!("bootstrap directory contains multiple OpusConfig JARs");
-            }
-        } else if name == "opus-elementa-762.jar" {
-            if elementa_jar.replace(path).is_some() {
-                anyhow::bail!("bootstrap directory contains multiple Elementa JARs");
-            }
-        } else if name == "opus-universalcraft-1.8.9-forge-516.jar" {
-            if universalcraft_jar.replace(path).is_some() {
-                anyhow::bail!("bootstrap directory contains multiple UniversalCraft JARs");
+                anyhow::bail!("bootstrap directory contains multiple Web Surface client JARs");
             }
         } else if name == "opus-lwjgl-macos-compat-2.9.2-nightly-20140822.jar" {
             if lwjgl_macos_compat_jar.replace(path).is_some() {
@@ -516,12 +510,9 @@ fn forge_bootstrap_artifacts(directory: &Path) -> Result<ForgeBootstrapArtifacts
         coremod_jar: coremod_jar.ok_or_else(|| anyhow::anyhow!("Forge coremod JAR is missing"))?,
         ui: ForgeUiArtifacts {
             native_ui_jar: native_ui_jar
-                .ok_or_else(|| anyhow::anyhow!("native UI JAR is missing"))?,
-            opusconfig_jar: opusconfig_jar
-                .ok_or_else(|| anyhow::anyhow!("OpusConfig JAR is missing"))?,
-            elementa_jar: elementa_jar.ok_or_else(|| anyhow::anyhow!("Elementa JAR is missing"))?,
-            universalcraft_jar: universalcraft_jar
-                .ok_or_else(|| anyhow::anyhow!("UniversalCraft JAR is missing"))?,
+                .ok_or_else(|| anyhow::anyhow!("Web Surface client JAR is missing"))?,
+            webview_helper_app: webview_helper_app
+                .ok_or_else(|| anyhow::anyhow!("Web Surface helper is missing"))?,
             lwjgl_macos_compat_jar: lwjgl_macos_compat_jar
                 .ok_or_else(|| anyhow::anyhow!("LWJGL compatibility JAR is missing"))?,
         },

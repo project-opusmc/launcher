@@ -3,7 +3,7 @@ set -euo pipefail
 
 # Reject a stale desktop binary that was built while the launcher still used
 # the macOS keyring. The source gate alone cannot detect an old installed app.
-# This is also the installed-artifact gate for the native UI game contract:
+# This is also the installed-artifact gate for the Web Surface V2 game contract:
 # no retired web UI payload, custom game title, or extra client JAR may slip
 # into a bundle even if the source-level checks passed.
 bundle_root="${1:?usage: assert-file-only-bundle.sh <bundle.app>}"
@@ -52,8 +52,8 @@ if [[ ! -d "${bootstrap_root}" ]]; then
 fi
 
 jar_count="$(find "${bootstrap_root}" -maxdepth 1 -type f -name '*.jar' | wc -l | tr -d '[:space:]')"
-if [[ "${jar_count}" != "7" ]]; then
-  echo "file-only bundle check: expected exactly seven managed Runtime JARs, found ${jar_count}: ${bootstrap_root}" >&2
+if [[ "${jar_count}" != "4" ]]; then
+  echo "file-only bundle check: expected exactly four managed Runtime JARs, found ${jar_count}: ${bootstrap_root}" >&2
   exit 1
 fi
 
@@ -62,9 +62,6 @@ bootstrap_candidates=("${bootstrap_root}"/opus-bootstrap-*.jar)
 coremod_candidates=("${bootstrap_root}"/opus-runtime-legacy-1.8.9-*.jar)
 lwjgl_macos_compat_candidates=("${bootstrap_root}"/opus-lwjgl-macos-compat-2.9.2-nightly-20140822.jar)
 native_ui_candidates=("${bootstrap_root}"/opus-native-ui-1.8.9-0.1.0.jar)
-opusconfig_candidates=("${bootstrap_root}"/opus-oneconfig-1.8.9-forge-0.2.2-alpha228-full.jar)
-elementa_candidates=("${bootstrap_root}"/opus-elementa-762.jar)
-universalcraft_candidates=("${bootstrap_root}"/opus-universalcraft-1.8.9-forge-516.jar)
 shopt -u nullglob
 if [[ "${#bootstrap_candidates[@]}" -ne 1 ]]; then
   echo "file-only bundle check: expected exactly one Forge bootstrap JAR: ${bootstrap_root}" >&2
@@ -79,32 +76,23 @@ if [[ "${#lwjgl_macos_compat_candidates[@]}" -ne 1 ]]; then
   exit 1
 fi
 if [[ "${#native_ui_candidates[@]}" -ne 1 ]]; then
-  echo "file-only bundle check: expected exactly one native UI JAR: ${bootstrap_root}" >&2
-  exit 1
-fi
-if [[ "${#opusconfig_candidates[@]}" -ne 1 ]]; then
-  echo "file-only bundle check: expected exactly one OpusConfig JAR: ${bootstrap_root}" >&2
-  exit 1
-fi
-if [[ "${#elementa_candidates[@]}" -ne 1 ]]; then
-  echo "file-only bundle check: expected exactly one Elementa JAR: ${bootstrap_root}" >&2
-  exit 1
-fi
-if [[ "${#universalcraft_candidates[@]}" -ne 1 ]]; then
-  echo "file-only bundle check: expected exactly one UniversalCraft JAR: ${bootstrap_root}" >&2
+  echo "file-only bundle check: expected exactly one Web Surface client JAR: ${bootstrap_root}" >&2
   exit 1
 fi
 bootstrap="${bootstrap_candidates[0]}"
 coremod="${coremod_candidates[0]}"
 lwjgl_macos_compat="${lwjgl_macos_compat_candidates[0]}"
 native_ui="${native_ui_candidates[0]}"
-opusconfig="${opusconfig_candidates[0]}"
-elementa="${elementa_candidates[0]}"
-universalcraft="${universalcraft_candidates[0]}"
 
-legacy_payload="$(find "${bundle_root}" -type f \( -iname '*cef*' -o -iname '*webview*' -o -iname '*opus-client*' -o -iname '*opus client*' \) -print -quit)"
-if [[ -n "${legacy_payload}" ]]; then
-  echo "file-only bundle check: retired UI payload is present: ${legacy_payload}" >&2
+webview_helper="${bootstrap_root}/opus-webview-helper.app"
+webview_binary="${webview_helper}/Contents/MacOS/opus-webview-helper"
+cef_framework="${webview_helper}/Contents/Frameworks/Chromium Embedded Framework.framework/Chromium Embedded Framework"
+if [[ ! -x "${webview_binary}" || ! -f "${cef_framework}" ]]; then
+  echo "file-only bundle check: Web Surface V2 CEF helper is incomplete: ${webview_helper}" >&2
+  exit 1
+fi
+if ! /usr/bin/codesign --verify --deep --strict "${webview_helper}" >/dev/null 2>&1; then
+  echo "file-only bundle check: Web Surface V2 CEF helper signature is invalid: ${webview_helper}" >&2
   exit 1
 fi
 
@@ -215,40 +203,38 @@ if ! unzip -p "${lwjgl_macos_compat}" org/lwjgl/opengl/MacOSXCanvasPeerInfo.clas
   echo "file-only bundle check: LWJGL pixel-format compatibility patch is missing: ${lwjgl_macos_compat}" >&2
   exit 1
 fi
-for managed_ui_jar in "${native_ui}" "${opusconfig}" "${elementa}" "${universalcraft}"; do
-  if ! unzip -tqq "${managed_ui_jar}" >/dev/null; then
-    echo "file-only bundle check: managed UI dependency is not a readable JAR: ${managed_ui_jar}" >&2
-    exit 1
-  fi
-done
+if ! unzip -tqq "${native_ui}" >/dev/null; then
+  echo "file-only bundle check: Web Surface client is not a readable JAR: ${native_ui}" >&2
+  exit 1
+fi
 for required_entry in \
-  org/polydevs/opusmc/nativeui/OpusNativeUiMod.class \
-  org/polydevs/opusmc/nativeui/OpusElementaShellScreen.class \
-  org/polydevs/opusmc/nativeui/OpusConfigModule.class; do
+  org/polydevs/opusmc/client/OpusClientMod.class \
+  org/polydevs/opusmc/client/OpusClientScreen.class \
+  org/polydevs/opusmc/client/embed/OpusWebViewClient.class \
+  org/polydevs/opusmc/client/embed/OpusWebTextureSurface.class \
+  org/polydevs/opusmc/websurface/OpusDisplayMetrics.class \
+  org/polydevs/opusmc/websurface/OpusInputMapper.class \
+  opusui/index.html; do
   # Do not use rg -q here: with pipefail enabled it exits before unzip has
   # finished writing, turning a valid match into a false broken-pipe failure.
   if ! unzip -Z1 "${native_ui}" | rg -F "${required_entry}" >/dev/null; then
-    echo "file-only bundle check: native UI entry is missing: ${required_entry}" >&2
+    echo "file-only bundle check: Web Surface client entry is missing: ${required_entry}" >&2
     exit 1
   fi
 done
-for required_entry in \
-  assets/oneconfig/icons/OpusConfigHead.svg \
-  cc/polyfrost/oneconfig/gui/OneConfigGui.class \
-  cc/polyfrost/oneconfig/gui/SideBar.class; do
-  if ! unzip -Z1 "${opusconfig}" | rg -F "${required_entry}" >/dev/null; then
-    echo "file-only bundle check: OpusConfig entry is missing: ${required_entry}" >&2
+if unzip -Z1 "${native_ui}" | rg -F 'org/polydevs/opusmc/nativeui/OpusNativeUiMod.class' >/dev/null; then
+  echo "file-only bundle check: retired Elementa screen owner is still present: ${native_ui}" >&2
+  exit 1
+fi
+for retired_ui in \
+  opus-oneconfig-1.8.9-forge-0.2.2-alpha228-full.jar \
+  opus-elementa-762.jar \
+  opus-universalcraft-1.8.9-forge-516.jar; do
+  if [[ -e "${bootstrap_root}/${retired_ui}" ]]; then
+    echo "file-only bundle check: retired UI dependency returned: ${retired_ui}" >&2
     exit 1
   fi
 done
-if ! unzip -Z1 "${elementa}" | rg -F 'gg/essential/elementa/components/UIBlock.class' >/dev/null; then
-  echo "file-only bundle check: Elementa UI classes are missing: ${elementa}" >&2
-  exit 1
-fi
-if ! unzip -Z1 "${universalcraft}" | rg -F 'gg/essential/universal/UMatrixStack.class' >/dev/null; then
-  echo "file-only bundle check: UniversalCraft classes are missing: ${universalcraft}" >&2
-  exit 1
-fi
 
 if ! unzip -tqq "${bootstrap}" >/dev/null; then
   echo "file-only bundle check: Forge bootstrap is not a readable JAR: ${bootstrap}" >&2
@@ -294,4 +280,4 @@ if rg -i -q 'cef|webview' <<<"${game_host_strings}"; then
   exit 1
 fi
 
-echo "file-only/native-UI bundle check: passed (${bundle_root})"
+echo "file-only/Web-Surface bundle check: passed (${bundle_root})"

@@ -29,9 +29,6 @@ const expectedRoles = new Set([
   "runtime-legacy-1.8.9",
   "lwjgl-macos-compat",
   "native-ui",
-  "opusconfig",
-  "elementa",
-  "universalcraft",
 ]);
 
 if (

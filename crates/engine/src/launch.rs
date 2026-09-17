@@ -1,11 +1,10 @@
 use crate::{
-    FORGE_COREMOD_SHA1, FORGE_COREMOD_SIZE, FORGE_ELEMENTA_SHA1, FORGE_ELEMENTA_SIZE,
-    FORGE_LWJGL_MACOS_COMPAT_SHA1, FORGE_LWJGL_MACOS_COMPAT_SIZE, FORGE_LWJGL_MACOS_NATIVE_SHA1,
-    FORGE_LWJGL_MACOS_NATIVE_SIZE, FORGE_LWJGL_RESIZE_GUARD_FILE_NAME,
-    FORGE_LWJGL_RESIZE_GUARD_SHA1, FORGE_LWJGL_RESIZE_GUARD_SIZE, FORGE_NATIVE_UI_SHA1,
-    FORGE_NATIVE_UI_SIZE, FORGE_OPUSCONFIG_SHA1, FORGE_OPUSCONFIG_SIZE, FORGE_RUNTIME_ID,
-    FORGE_UNIVERSALCRAFT_SHA1, FORGE_UNIVERSALCRAFT_SIZE, ForgeRuntimeLock, InstalledMinecraft,
-    ManagedJava, MinecraftLayout, extract_natives, replace_native_from_archive, verify_file,
+    FORGE_COREMOD_SHA1, FORGE_COREMOD_SIZE, FORGE_LWJGL_MACOS_COMPAT_SHA1,
+    FORGE_LWJGL_MACOS_COMPAT_SIZE, FORGE_LWJGL_MACOS_NATIVE_SHA1, FORGE_LWJGL_MACOS_NATIVE_SIZE,
+    FORGE_LWJGL_RESIZE_GUARD_FILE_NAME, FORGE_LWJGL_RESIZE_GUARD_SHA1,
+    FORGE_LWJGL_RESIZE_GUARD_SIZE, FORGE_NATIVE_UI_SHA1, FORGE_NATIVE_UI_SIZE, FORGE_RUNTIME_ID,
+    ForgeRuntimeLock, InstalledMinecraft, ManagedJava, MinecraftLayout, extract_natives,
+    replace_native_from_archive, verify_file,
 };
 #[cfg(feature = "opus-owned-m3-preview")]
 use base64::Engine;
@@ -124,9 +123,7 @@ impl Default for LaunchOptions {
 #[derive(Debug, Clone)]
 pub struct ForgeUiArtifacts {
     pub native_ui_jar: PathBuf,
-    pub opusconfig_jar: PathBuf,
-    pub elementa_jar: PathBuf,
-    pub universalcraft_jar: PathBuf,
+    pub webview_helper_app: PathBuf,
     pub lwjgl_macos_compat_jar: PathBuf,
 }
 
@@ -230,9 +227,6 @@ struct ForgeLaunchContract {
     optifine: crate::DownloadSpec,
     coremod: crate::DownloadSpec,
     native_ui: crate::DownloadSpec,
-    opusconfig: crate::DownloadSpec,
-    elementa: crate::DownloadSpec,
-    universalcraft: crate::DownloadSpec,
     lwjgl_macos_compat: crate::DownloadSpec,
 }
 
@@ -259,9 +253,6 @@ impl ForgeLaunchContract {
             },
             coremod: forge_coremod_spec(),
             native_ui: forge_native_ui_spec(),
-            opusconfig: forge_opusconfig_spec(),
-            elementa: forge_elementa_spec(),
-            universalcraft: forge_universalcraft_spec(),
             lwjgl_macos_compat: forge_lwjgl_macos_compat_spec(),
         })
     }
@@ -412,7 +403,19 @@ impl LaunchPlan {
                 OsString::from(format!("-Dopus.native.ui.session={session_id}")),
                 OsString::from("-Dopus.native.ui.enabled=true"),
                 OsString::from("-Dopus.native.ui.requireOptifine=true"),
+                OsString::from("-Dopus.client.ui.enabled=true"),
             ]);
+        }
+        let webview_helper_app = match mode {
+            LaunchMode::ForgeBootstrap { ui, .. } => Some(&ui.webview_helper_app),
+            #[cfg(feature = "opus-owned-m3-preview")]
+            LaunchMode::OpusOwnedM3Preview { .. } => None,
+        };
+        if platform.os == OperatingSystem::MacOs {
+            if let Some(helper) = webview_helper_app {
+                let helper = stage_macos_webview_helper(layout, helper)?;
+                jvm_arguments.push(prefixed_path_argument("-Dopus.webview.helper=", &helper));
+            }
         }
         if let Some(utility_settings_file) = &options.utility_settings_file {
             jvm_arguments.push(prefixed_path_argument(
@@ -496,34 +499,13 @@ impl LaunchPlan {
                     &contract.native_ui,
                     "opus-native-ui-1.8.9-0.1.0.jar",
                 )?;
-                let staged_opusconfig = stage_forge_ui_artifact(
-                    layout,
-                    &ui.opusconfig_jar,
-                    &contract.opusconfig,
-                    "opus-oneconfig-1.8.9-forge-0.2.2-alpha228-full.jar",
-                )?;
-                let staged_elementa = stage_forge_ui_artifact(
-                    layout,
-                    &ui.elementa_jar,
-                    &contract.elementa,
-                    "opus-elementa-762.jar",
-                )?;
-                let staged_universalcraft = stage_forge_ui_artifact(
-                    layout,
-                    &ui.universalcraft_jar,
-                    &contract.universalcraft,
-                    "opus-universalcraft-1.8.9-forge-516.jar",
-                )?;
-                remove_retired_forge_client_mod(layout)?;
+                remove_retired_forge_ui_mods(layout)?;
                 validate_managed_forge_mods(
                     layout,
                     &[
                         staged_optifine.as_path(),
                         staged_coremod.as_path(),
                         staged_native_ui.as_path(),
-                        staged_opusconfig.as_path(),
-                        staged_elementa.as_path(),
-                        staged_universalcraft.as_path(),
                     ],
                 )?;
             }
@@ -562,7 +544,7 @@ impl LaunchPlan {
             // The verified compatibility JAR is the complete LWJGL 2 Java
             // replacement on macOS. Keeping Mojang's original Java JAR in
             // LaunchWrapper's URL list would let its sealed packages win
-            // before OneConfig reopens the org.lwjgl loader exception.
+            // before the verified compatibility layer can own the loader path.
             game_classpath.retain(|entry| !is_pinned_lwjgl_macos_java_artifact(entry));
         }
         let mut system_classpath = Vec::with_capacity(game_classpath.len() + 3);
@@ -969,29 +951,119 @@ fn forge_native_ui_spec() -> crate::DownloadSpec {
     }
 }
 
-fn forge_opusconfig_spec() -> crate::DownloadSpec {
-    crate::DownloadSpec {
-        url: "https://opus.invalid/release/opus-oneconfig-1.8.9-forge-0.2.2-alpha228-full.jar"
-            .to_owned(),
-        sha1: FORGE_OPUSCONFIG_SHA1.to_owned(),
-        size: Some(FORGE_OPUSCONFIG_SIZE),
-    }
+fn macos_webview_helper_fingerprint_paths(app: &Path) -> Vec<PathBuf> {
+    let frameworks = app.join("Contents/Frameworks");
+    vec![
+        app.join("Contents/Info.plist"),
+        app.join("Contents/MacOS/opus-webview-helper"),
+        frameworks.join("Chromium Embedded Framework.framework/Chromium Embedded Framework"),
+        frameworks.join("opus-keychain-guard.dylib"),
+        frameworks.join(
+            "opus-webview-helper Helper.app/Contents/MacOS/opus-webview-helper Helper",
+        ),
+        frameworks.join(
+            "opus-webview-helper Helper (Renderer).app/Contents/MacOS/opus-webview-helper Helper (Renderer)",
+        ),
+        frameworks.join(
+            "opus-webview-helper Helper (GPU).app/Contents/MacOS/opus-webview-helper Helper (GPU)",
+        ),
+        frameworks.join(
+            "opus-webview-helper Helper (Plugin).app/Contents/MacOS/opus-webview-helper Helper (Plugin)",
+        ),
+        frameworks.join(
+            "opus-webview-helper Helper (Alerts).app/Contents/MacOS/opus-webview-helper Helper (Alerts)",
+        ),
+    ]
 }
 
-fn forge_elementa_spec() -> crate::DownloadSpec {
-    crate::DownloadSpec {
-        url: "https://opus.invalid/release/opus-elementa-762.jar".to_owned(),
-        sha1: FORGE_ELEMENTA_SHA1.to_owned(),
-        size: Some(FORGE_ELEMENTA_SIZE),
+fn macos_webview_helper_fingerprint(app: &Path) -> Result<String, LaunchError> {
+    let paths = macos_webview_helper_fingerprint_paths(app);
+    if !app.is_dir() || paths.iter().any(|path| !path.is_file()) {
+        return Err(LaunchError::MacosWebViewHelperInvalid(app.to_path_buf()));
     }
+    let mut hasher = Sha1::new();
+    for path in paths {
+        let relative = path
+            .strip_prefix(app)
+            .map_err(|_| LaunchError::MacosWebViewHelperInvalid(app.to_path_buf()))?;
+        hasher.update(relative.as_os_str().to_string_lossy().as_bytes());
+        hasher.update([0]);
+        let metadata = fs::metadata(&path)?;
+        hasher.update(metadata.len().to_be_bytes());
+        let mut file = File::open(&path)?;
+        let mut buffer = [0u8; 1024 * 1024];
+        loop {
+            let read = file.read(&mut buffer)?;
+            if read == 0 {
+                break;
+            }
+            hasher.update(&buffer[..read]);
+        }
+    }
+    Ok(format!("{:x}", hasher.finalize()))
 }
 
-fn forge_universalcraft_spec() -> crate::DownloadSpec {
-    crate::DownloadSpec {
-        url: "https://opus.invalid/release/opus-universalcraft-1.8.9-forge-516.jar".to_owned(),
-        sha1: FORGE_UNIVERSALCRAFT_SHA1.to_owned(),
-        size: Some(FORGE_UNIVERSALCRAFT_SIZE),
+fn verify_staged_macos_webview_helper(
+    app: &Path,
+    expected_fingerprint: &str,
+) -> Result<(), LaunchError> {
+    if macos_webview_helper_fingerprint(app)? != expected_fingerprint {
+        return Err(LaunchError::MacosWebViewHelperInvalid(app.to_path_buf()));
     }
+    let status = Command::new("/usr/bin/codesign")
+        .args(["--verify", "--deep", "--strict"])
+        .arg(app)
+        .status()?;
+    if !status.success() {
+        return Err(LaunchError::MacosWebViewHelperInvalid(app.to_path_buf()));
+    }
+    Ok(())
+}
+
+fn stage_macos_webview_helper(
+    layout: &MinecraftLayout,
+    source: &Path,
+) -> Result<PathBuf, LaunchError> {
+    let fingerprint = macos_webview_helper_fingerprint(source)?;
+    verify_staged_macos_webview_helper(source, &fingerprint)?;
+
+    let cef_root = layout.paths.runtime.join("cef");
+    let destination_root = cef_root.join(format!("helper-{fingerprint}"));
+    let destination = destination_root.join("opus-webview-helper.app");
+    if verify_staged_macos_webview_helper(&destination, &fingerprint).is_ok() {
+        return Ok(destination);
+    }
+
+    fs::create_dir_all(&cef_root)?;
+    if destination_root.exists() {
+        fs::remove_dir_all(&destination_root)?;
+    }
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| LaunchError::SystemClockBeforeEpoch)?
+        .as_nanos();
+    let staging_root = cef_root.join(format!(".helper-stage-{}-{nonce}", std::process::id()));
+    let staging = staging_root.join("opus-webview-helper.app");
+    fs::create_dir_all(&staging_root)?;
+
+    let result = (|| -> Result<(), LaunchError> {
+        let status = Command::new("/usr/bin/ditto")
+            .arg(source)
+            .arg(&staging)
+            .status()?;
+        if !status.success() {
+            return Err(LaunchError::MacosWebViewHelperStageFailed(status));
+        }
+        verify_staged_macos_webview_helper(&staging, &fingerprint)?;
+        fs::rename(&staging_root, &destination_root)?;
+        verify_staged_macos_webview_helper(&destination, &fingerprint)?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_dir_all(&staging_root);
+    }
+    result?;
+    Ok(destination)
 }
 
 fn forge_lwjgl_macos_compat_spec() -> crate::DownloadSpec {
@@ -1262,20 +1334,26 @@ fn validate_managed_forge_mods(
     Ok(())
 }
 
-/// The old typed client-mod name is a bounded migration target. Remove only
-/// that exact regular file before validating the managed Forge set so an
-/// older launcher session cannot resurrect any in-game UI path.
-fn remove_retired_forge_client_mod(layout: &MinecraftLayout) -> Result<(), LaunchError> {
-    let path = layout.mods_dir().join("opus-client-legacy-1.8.9.jar");
-    match fs::symlink_metadata(&path) {
-        Ok(metadata) if metadata.file_type().is_file() => {
-            fs::remove_file(path)?;
-            Ok(())
+/// Remove only exact OPUS-owned UI artifacts retired by the Web Surface
+/// cutover. This makes the first launch after an update migrate an existing
+/// isolated mods directory instead of rejecting files that the previous
+/// launcher itself installed.
+fn remove_retired_forge_ui_mods(layout: &MinecraftLayout) -> Result<(), LaunchError> {
+    for file_name in [
+        "opus-client-legacy-1.8.9.jar",
+        "opus-oneconfig-1.8.9-forge-0.2.2-alpha228-full.jar",
+        "opus-elementa-762.jar",
+        "opus-universalcraft-1.8.9-forge-516.jar",
+    ] {
+        let path = layout.mods_dir().join(file_name);
+        match fs::symlink_metadata(&path) {
+            Ok(metadata) if metadata.file_type().is_file() => fs::remove_file(path)?,
+            Ok(_) => return Err(LaunchError::UnmanagedForgeMod(path)),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(LaunchError::Io(error)),
         }
-        Ok(_) => Err(LaunchError::UnmanagedForgeMod(path)),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(LaunchError::Io(error)),
     }
+    Ok(())
 }
 
 /// The M3 preview host must not inherit legacy OPUS behavior. It starts the
@@ -2392,6 +2470,10 @@ pub enum LaunchError {
     },
     #[error("macOS game app is incomplete or missing: {path}", path = .0.display())]
     MacosGameAppMissing(PathBuf),
+    #[error("macOS Web Surface helper is invalid: {path}", path = .0.display())]
+    MacosWebViewHelperInvalid(PathBuf),
+    #[error("macOS Web Surface helper staging failed ({0})")]
+    MacosWebViewHelperStageFailed(ExitStatus),
     #[error("macOS LaunchServices could not start the game app ({0})")]
     MacosGameAppLaunchFailed(ExitStatus),
     #[error("Minecraft reported a startup or runtime failure")]
@@ -2443,9 +2525,7 @@ mod tests {
         bootstrap_jar: PathBuf,
         coremod_jar: PathBuf,
         native_ui_jar: PathBuf,
-        opusconfig_jar: PathBuf,
-        elementa_jar: PathBuf,
-        universalcraft_jar: PathBuf,
+        webview_helper_app: PathBuf,
         lwjgl_macos_compat_jar: PathBuf,
         optifine_jar: PathBuf,
         contract: ForgeLaunchContract,
@@ -2462,13 +2542,8 @@ mod tests {
             let vanilla_classpath = temporary.path().join("vanilla-client.jar");
             let coremod_jar = temporary.path().join("opus-runtime-legacy-1.8.9-0.0.1.jar");
             let native_ui_jar = temporary.path().join("opus-native-ui-1.8.9-0.1.0.jar");
-            let opusconfig_jar = temporary
-                .path()
-                .join("opus-oneconfig-1.8.9-forge-0.2.2-alpha228-full.jar");
-            let elementa_jar = temporary.path().join("opus-elementa-762.jar");
-            let universalcraft_jar = temporary
-                .path()
-                .join("opus-universalcraft-1.8.9-forge-516.jar");
+            let webview_helper_app = temporary.path().join("opus-webview-helper.app");
+            std::fs::create_dir_all(&webview_helper_app).unwrap();
             let lwjgl_macos_compat_jar = temporary
                 .path()
                 .join("opus-lwjgl-macos-compat-2.9.2-nightly-20140822.jar");
@@ -2493,14 +2568,7 @@ mod tests {
                     ("org/polydevs/opusmc/forge/OpusLoadingPlugin.class", b"coremod fixture"),
                 ],
             );
-            for (path, marker) in [
-                (&native_ui_jar, b"native UI fixture".as_slice()),
-                (&opusconfig_jar, b"OpusConfig fixture".as_slice()),
-                (&elementa_jar, b"Elementa fixture".as_slice()),
-                (&universalcraft_jar, b"UniversalCraft fixture".as_slice()),
-            ] {
-                write_zip(path, &[("fixture.txt", marker)]);
-            }
+            write_zip(&native_ui_jar, &[("fixture.txt", b"native UI fixture")]);
             write_zip(
                 &lwjgl_macos_compat_jar,
                 &[
@@ -2524,9 +2592,6 @@ mod tests {
                 optifine: fixture_spec(&optifine_jar),
                 coremod: fixture_spec(&coremod_jar),
                 native_ui: fixture_spec(&native_ui_jar),
-                opusconfig: fixture_spec(&opusconfig_jar),
-                elementa: fixture_spec(&elementa_jar),
-                universalcraft: fixture_spec(&universalcraft_jar),
                 lwjgl_macos_compat: fixture_spec(&lwjgl_macos_compat_jar),
             };
             let minecraft = InstalledMinecraft {
@@ -2562,9 +2627,7 @@ mod tests {
                 bootstrap_jar,
                 coremod_jar,
                 native_ui_jar,
-                opusconfig_jar,
-                elementa_jar,
-                universalcraft_jar,
+                webview_helper_app,
                 lwjgl_macos_compat_jar,
                 optifine_jar,
                 contract,
@@ -2577,9 +2640,7 @@ mod tests {
                 coremod_jar: self.coremod_jar.clone(),
                 ui: ForgeUiArtifacts {
                     native_ui_jar: self.native_ui_jar.clone(),
-                    opusconfig_jar: self.opusconfig_jar.clone(),
-                    elementa_jar: self.elementa_jar.clone(),
-                    universalcraft_jar: self.universalcraft_jar.clone(),
+                    webview_helper_app: self.webview_helper_app.clone(),
                     lwjgl_macos_compat_jar: self.lwjgl_macos_compat_jar.clone(),
                 },
             }
@@ -2671,6 +2732,40 @@ mod tests {
         assert!(GameIdentity::offline("ab").is_err());
         assert!(GameIdentity::offline("name with spaces").is_err());
         assert!(GameIdentity::offline("valid_Name9").is_ok());
+    }
+
+    fn write_webview_helper_fingerprint_fixture(root: &Path) -> PathBuf {
+        let app = root.join("opus-webview-helper.app");
+        for path in macos_webview_helper_fingerprint_paths(&app) {
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(&path, path.to_string_lossy().as_bytes()).unwrap();
+        }
+        app
+    }
+
+    #[test]
+    fn macos_webview_helper_fingerprint_covers_subprocess_binaries() {
+        let temporary = tempfile::tempdir().unwrap();
+        let app = write_webview_helper_fingerprint_fixture(temporary.path());
+        let before = macos_webview_helper_fingerprint(&app).unwrap();
+        let renderer = app.join(
+            "Contents/Frameworks/opus-webview-helper Helper (Renderer).app/Contents/MacOS/opus-webview-helper Helper (Renderer)",
+        );
+        fs::write(&renderer, b"renderer changed independently").unwrap();
+        let after = macos_webview_helper_fingerprint(&app).unwrap();
+        assert_ne!(before, after);
+    }
+
+    #[test]
+    fn macos_webview_helper_fingerprint_rejects_incomplete_bundle() {
+        let temporary = tempfile::tempdir().unwrap();
+        let app = write_webview_helper_fingerprint_fixture(temporary.path());
+        let guard = app.join("Contents/Frameworks/opus-keychain-guard.dylib");
+        fs::remove_file(&guard).unwrap();
+        assert!(matches!(
+            macos_webview_helper_fingerprint(&app),
+            Err(LaunchError::MacosWebViewHelperInvalid(path)) if path == app
+        ));
     }
 
     #[test]
@@ -2878,13 +2973,7 @@ mod tests {
             coremod_jar: PathBuf::from("/private/opus-runtime-legacy-1.8.9-0.0.1.jar"),
             ui: ForgeUiArtifacts {
                 native_ui_jar: PathBuf::from("/private/opus-native-ui-1.8.9-0.1.0.jar"),
-                opusconfig_jar: PathBuf::from(
-                    "/private/opus-oneconfig-1.8.9-forge-0.2.2-alpha228-full.jar",
-                ),
-                elementa_jar: PathBuf::from("/private/opus-elementa-762.jar"),
-                universalcraft_jar: PathBuf::from(
-                    "/private/opus-universalcraft-1.8.9-forge-516.jar",
-                ),
+                webview_helper_app: PathBuf::from("/private/opus-webview-helper.app"),
                 lwjgl_macos_compat_jar: PathBuf::from(
                     "/private/opus-lwjgl-macos-compat-2.9.2-nightly-20140822.jar",
                 ),
@@ -3059,6 +3148,17 @@ mod tests {
             b"stale client artifact",
         )
         .unwrap();
+        for retired in [
+            "opus-oneconfig-1.8.9-forge-0.2.2-alpha228-full.jar",
+            "opus-elementa-762.jar",
+            "opus-universalcraft-1.8.9-forge-516.jar",
+        ] {
+            fs::write(
+                fixture.layout.mods_dir().join(retired),
+                b"retired UI artifact",
+            )
+            .unwrap();
+        }
         let mode = fixture.mode();
         let identity = GameIdentity::offline("ForgeFixture").unwrap();
         let plan = LaunchPlan::build_with_forge_contract(
@@ -3083,6 +3183,10 @@ mod tests {
         assert!(
             plan.jvm_arguments
                 .contains(&OsString::from("-Dopus.native.ui.enabled=true"))
+        );
+        assert!(
+            plan.jvm_arguments
+                .contains(&OsString::from("-Dopus.client.ui.enabled=true"))
         );
         assert!(
             plan.jvm_arguments
@@ -3111,65 +3215,30 @@ mod tests {
         );
         validate_forge_coremod(&staged_coremod, &fixture.contract.coremod).unwrap();
 
-        for (name, source, spec) in [
-            (
-                "opus-native-ui-1.8.9-0.1.0.jar",
-                &fixture.native_ui_jar,
-                &fixture.contract.native_ui,
-            ),
-            (
-                "opus-oneconfig-1.8.9-forge-0.2.2-alpha228-full.jar",
-                &fixture.opusconfig_jar,
-                &fixture.contract.opusconfig,
-            ),
-            (
-                "opus-elementa-762.jar",
-                &fixture.elementa_jar,
-                &fixture.contract.elementa,
-            ),
-            (
-                "opus-universalcraft-1.8.9-forge-516.jar",
-                &fixture.universalcraft_jar,
-                &fixture.contract.universalcraft,
-            ),
-        ] {
-            let staged = fixture.layout.mods_dir().join(name);
-            assert_eq!(fs::read(&staged).unwrap(), fs::read(source).unwrap());
-            validate_forge_ui_artifact(&staged, spec).unwrap();
-        }
-
-        assert!(
-            !fixture
-                .layout
-                .mods_dir()
-                .join("opus-client-legacy-1.8.9.jar")
-                .exists()
+        let staged_native_ui = fixture
+            .layout
+            .mods_dir()
+            .join("opus-native-ui-1.8.9-0.1.0.jar");
+        assert_eq!(
+            fs::read(&staged_native_ui).unwrap(),
+            fs::read(&fixture.native_ui_jar).unwrap()
         );
+        validate_forge_ui_artifact(&staged_native_ui, &fixture.contract.native_ui).unwrap();
+
+        for retired in [
+            "opus-client-legacy-1.8.9.jar",
+            "opus-oneconfig-1.8.9-forge-0.2.2-alpha228-full.jar",
+            "opus-elementa-762.jar",
+            "opus-universalcraft-1.8.9-forge-516.jar",
+        ] {
+            assert!(!fixture.layout.mods_dir().join(retired).exists());
+        }
         validate_managed_forge_mods(
             &fixture.layout,
             &[
                 fixture.optifine_jar.as_path(),
                 staged_coremod.as_path(),
-                fixture
-                    .layout
-                    .mods_dir()
-                    .join("opus-native-ui-1.8.9-0.1.0.jar")
-                    .as_path(),
-                fixture
-                    .layout
-                    .mods_dir()
-                    .join("opus-oneconfig-1.8.9-forge-0.2.2-alpha228-full.jar")
-                    .as_path(),
-                fixture
-                    .layout
-                    .mods_dir()
-                    .join("opus-elementa-762.jar")
-                    .as_path(),
-                fixture
-                    .layout
-                    .mods_dir()
-                    .join("opus-universalcraft-1.8.9-forge-516.jar")
-                    .as_path(),
+                staged_native_ui.as_path(),
             ],
         )
         .unwrap();

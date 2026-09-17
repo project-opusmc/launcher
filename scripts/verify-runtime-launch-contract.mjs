@@ -59,48 +59,6 @@ const expected = {
       ).replaceAll("_", ""),
     ),
   },
-  opusconfig: {
-    sha1: readConstant(
-      forge,
-      "FORGE_OPUSCONFIG_SHA1",
-      /FORGE_OPUSCONFIG_SHA1:\s*&str\s*=\s*"([0-9a-f]{40})"/,
-    ),
-    size: Number(
-      readConstant(
-        forge,
-        "FORGE_OPUSCONFIG_SIZE",
-        /FORGE_OPUSCONFIG_SIZE:\s*u64\s*=\s*([0-9_]+)/,
-      ).replaceAll("_", ""),
-    ),
-  },
-  elementa: {
-    sha1: readConstant(
-      forge,
-      "FORGE_ELEMENTA_SHA1",
-      /FORGE_ELEMENTA_SHA1:\s*&str\s*=\s*"([0-9a-f]{40})"/,
-    ),
-    size: Number(
-      readConstant(
-        forge,
-        "FORGE_ELEMENTA_SIZE",
-        /FORGE_ELEMENTA_SIZE:\s*u64\s*=\s*([0-9_]+)/,
-      ).replaceAll("_", ""),
-    ),
-  },
-  universalcraft: {
-    sha1: readConstant(
-      forge,
-      "FORGE_UNIVERSALCRAFT_SHA1",
-      /FORGE_UNIVERSALCRAFT_SHA1:\s*&str\s*=\s*"([0-9a-f]{40})"/,
-    ),
-    size: Number(
-      readConstant(
-        forge,
-        "FORGE_UNIVERSALCRAFT_SIZE",
-        /FORGE_UNIVERSALCRAFT_SIZE:\s*u64\s*=\s*([0-9_]+)/,
-      ).replaceAll("_", ""),
-    ),
-  },
   lwjglMacosCompat: {
     sha1: readConstant(
       forge,
@@ -152,7 +110,7 @@ if (
   manifest.protocolVersion !== 1 ||
   manifest.minecraftVersion !== "1.8.9" ||
   !Array.isArray(manifest.artifacts) ||
-  manifest.artifacts.length !== 7 ||
+  manifest.artifacts.length !== 4 ||
   checksums.schemaVersion !== 1 ||
   checksums.algorithm !== "SHA-256" ||
   checksums.files === null ||
@@ -178,19 +136,6 @@ const required = [
     "opus-lwjgl-macos-compat-2.9.2-nightly-20140822.jar",
   ],
   ["native-ui", "nativeUi", null, "opus-native-ui-1.8.9-0.1.0.jar"],
-  [
-    "opusconfig",
-    "opusconfig",
-    null,
-    "opus-oneconfig-1.8.9-forge-0.2.2-alpha228-full.jar",
-  ],
-  ["elementa", "elementa", null, "opus-elementa-762.jar"],
-  [
-    "universalcraft",
-    "universalcraft",
-    null,
-    "opus-universalcraft-1.8.9-forge-516.jar",
-  ],
 ];
 for (const [role, contract, namePrefix, exactName] of required) {
   const artifact = records.get(role);
@@ -308,5 +253,5 @@ if (!statSync(bootstrapPath).isFile()) {
 }
 
 console.log(
-  "Runtime launch contract verified: Core Mod + LWJGL macOS compatibility + native UI + OpusConfig + Elementa + UniversalCraft",
+  "Runtime launch contract verified: Core Mod + LWJGL macOS compatibility + Web Surface V2 client",
 );
