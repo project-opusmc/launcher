@@ -10,8 +10,8 @@ pub const FORGE_OPTIFINE_FILE_NAME: &str = "OptiFine_1.8.9_HD_U_M5.jar";
 /// cannot produce a build that installs successfully but cannot launch.
 pub const FORGE_COREMOD_SHA1: &str = "d9ad2df678638eaede0b1a7da7f5be6dc5f6237c";
 pub const FORGE_COREMOD_SIZE: u64 = 60_299;
-pub const FORGE_NATIVE_UI_SHA1: &str = "04c09afe5a338fabacd06edd3ec84c2e22bf04a1";
-pub const FORGE_NATIVE_UI_SIZE: u64 = 478_416;
+pub const FORGE_NATIVE_UI_SHA1: &str = "8ef7d3199d199595a948d5b119ffb31d8338cc86";
+pub const FORGE_NATIVE_UI_SIZE: u64 = 478_470;
 /// The sealed LWJGL 2.9.2 compatibility artifact. It preserves Minecraft's
 /// stock pixel-format request, bypasses the obsolete display-mode query, and
 /// coalesces native Cocoa live-resize geometry without blocking AppKit on a
