@@ -1,37 +1,26 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { RemoveAccountDialog } from "./ui/RemoveAccountDialog";
+import { mergeUtilitySettings, type UtilitySettings } from "./utilitySettings";
 import LauncherTui, {
-  type TuiInstallProgress,
   type TuiAccount,
+  type TuiAccountSkin,
+  type TuiInstallProgress,
+  type TuiInstance,
   type TuiPage,
   type TuiSettings,
   type TuiSnapshot,
-  type TuiUtilityAnchor,
   type TuiUtilityDefinition,
   type TuiUtilityId,
   type TuiUtilityPreference,
 } from "./ui/LauncherTui";
 
-type BuildEdition = "unified";
-
 type DeveloperTestProfile = {
   available: boolean;
   active: boolean;
   simulationActive: boolean;
-};
-
-type InstallResult = {
-  minecraftVersion: string;
-  javaVersion: string;
-  optifineReady: boolean;
-  downloadedFiles: number;
-  cachedFiles: number;
-};
-
-type OptiFineImportResult = {
-  fileName: string;
 };
 
 type AccountResult = {
@@ -46,14 +35,20 @@ type GameLaunchStarted = {
   simulated: boolean;
 };
 
-type GameLaunchFinished = {
-  sessionId: string;
-  logDirectory: string | null;
-  accountId: string;
+type GameLaunchFinished = GameLaunchStarted & {
   outcome: "exited" | "failed";
   message: string;
-  simulated: boolean;
 };
+
+type InstallResult = {
+  minecraftVersion: string;
+  javaVersion: string;
+  optifineReady: boolean;
+  downloadedFiles: number;
+  cachedFiles: number;
+};
+
+type OptiFineImportResult = { fileName: string };
 
 type RunningInstance = {
   sessionId: string;
@@ -64,186 +59,138 @@ type RunningInstance = {
   logDirectory: string;
 };
 
-type AccountSkin = {
-  dataUrl: string;
-  model: "classic" | "slim";
-  isDefault: boolean;
-};
-
-type UtilitySettings = {
-  schemaVersion: number;
-  utilities: Record<TuiUtilityId, TuiUtilityPreference>;
-};
-
-type InstallProgressEvent = TuiInstallProgress;
+type AccountSkin = TuiAccountSkin;
 
 const defaultSettings: TuiSettings = {
   maxMemoryMib: 2048,
   closeLauncherOnGameStart: false,
+  launchProfileType: "standalone",
 };
 
 const utilityDefinitions: readonly TuiUtilityDefinition[] = [
   {
     id: "fps",
     category: "performance",
-    name: "FPS Counter",
-    description: "Live frame rate",
-    purpose: "Display the current Minecraft frame rate using the game's live counter.",
+    name: "FPS Monitor",
+    description: "Live Minecraft frame-rate counter.",
+    purpose: "Keep the current frame rate visible while tuning settings.",
     icon: "FPS",
   },
   {
     id: "cps",
-    category: "performance",
-    name: "CPS",
-    description: "Clicks in the last second",
-    purpose: "Display left-clicks counted over the previous one-second window.",
+    category: "input",
+    name: "CPS Tracker",
+    description: "Left and right mouse click rate counters with trailing peak hold.",
+    purpose: "Track input pacing and debounce thresholds during combat and bridging.",
     icon: "CPS",
   },
   {
     id: "memory",
     category: "performance",
-    name: "Memory",
-    description: "Current Java heap usage",
-    purpose: "Display memory currently used by the running Minecraft process.",
+    name: "Memory HUD",
+    description: "Heap allocation, GC pressure, and committed memory monitor.",
+    purpose: "Monitor allocated JVM heap without opening the heavy debug overlay.",
     icon: "MEM",
   },
   {
     id: "coordinates",
     category: "hud",
     name: "Coordinates",
-    description: "Live player position",
-    purpose: "Display the player's current XYZ position from local game state.",
+    description: "Compass heading, biome identity, and XYZ spatial position.",
+    purpose: "Maintain spatial awareness during navigation without cluttering view.",
     icon: "XYZ",
   },
   {
     id: "clock",
     category: "hud",
-    name: "Clock",
-    description: "Local system time",
-    purpose: "Display a live 24-hour clock without contacting a server.",
-    icon: "TIME",
+    name: "Session Clock",
+    description: "Real-world time and active gaming session duration meter.",
+    purpose: "Keep track of active session time and system time inside full-screen play.",
+    icon: "CLK",
   },
   {
     id: "keystrokes",
     category: "input",
-    name: "Keystrokes",
-    description: "WASD input state",
-    purpose: "Display the live pressed state of the W, A, S and D keys.",
-    icon: "WASD",
+    name: "Keystrokes HUD",
+    description: "Movement, jump, and mouse-button states using your actual key bindings.",
+    purpose: "See physical press and release states, including rebound controls.",
+    icon: "KEYS",
   },
 ];
 
-const defaultUtilitySettings: UtilitySettings = {
-  schemaVersion: 1,
-  utilities: {
-    fps: { enabled: false, anchor: "top-left", offset: "12 x 12", scale: 100, opacity: 100 },
-    cps: { enabled: false, anchor: "top-left", offset: "12 x 26", scale: 100, opacity: 100 },
-    memory: { enabled: false, anchor: "top-right", offset: "12 x 12", scale: 100, opacity: 100 },
-    coordinates: { enabled: false, anchor: "bottom-left", offset: "12 x 28", scale: 100, opacity: 100 },
-    clock: { enabled: false, anchor: "top-right", offset: "12 x 26", scale: 100, opacity: 100 },
-    keystrokes: { enabled: false, anchor: "bottom-right", offset: "12 x 28", scale: 100, opacity: 100 },
-  },
-};
-
-const minecraftUsernamePattern = /^[A-Za-z0-9_]{3,16}$/;
+function defaultUtilityPreference(id: TuiUtilityId): TuiUtilityPreference {
+  switch (id) {
+    case "fps":
+      return { enabled: false, anchor: "top-left", offset: "12 · 12", scale: 100, opacity: 100 };
+    case "cps":
+      return { enabled: false, anchor: "top-left", offset: "12 · 26", scale: 100, opacity: 100 };
+    case "memory":
+      return { enabled: false, anchor: "top-right", offset: "12 · 12", scale: 100, opacity: 100 };
+    case "coordinates":
+      return { enabled: false, anchor: "bottom-left", offset: "12 · 28", scale: 100, opacity: 100 };
+    case "clock":
+      return { enabled: false, anchor: "top-right", offset: "12 · 26", scale: 100, opacity: 100 };
+    case "keystrokes":
+      return { enabled: false, anchor: "bottom-right", offset: "12 · 28", scale: 100, opacity: 100 };
+  }
+}
 
 function createDefaultUtilitySettings(): UtilitySettings {
   return {
     schemaVersion: 1,
-    utilities: Object.fromEntries(
-      Object.entries(defaultUtilitySettings.utilities).map(([id, preference]) => [id, { ...preference }]),
-    ) as Record<TuiUtilityId, TuiUtilityPreference>,
+    utilities: {
+      fps: defaultUtilityPreference("fps"),
+      cps: defaultUtilityPreference("cps"),
+      memory: defaultUtilityPreference("memory"),
+      coordinates: defaultUtilityPreference("coordinates"),
+      clock: defaultUtilityPreference("clock"),
+      keystrokes: defaultUtilityPreference("keystrokes"),
+    },
   };
 }
 
-function normalizeUtilitySettings(candidate: Partial<UtilitySettings> | null | undefined): UtilitySettings {
-  const fallback = createDefaultUtilitySettings();
-  const validAnchors: readonly TuiUtilityAnchor[] = ["top-left", "top-right", "bottom-left", "bottom-right"];
-  const utilities = Object.fromEntries(utilityDefinitions.map((utility) => {
-    const next = candidate?.utilities?.[utility.id];
-    const fallbackPreference = fallback.utilities[utility.id];
-    const anchor = next?.anchor && validAnchors.includes(next.anchor)
-      ? next.anchor
-      : fallbackPreference.anchor;
-    return [utility.id, {
-      enabled: candidate?.schemaVersion === fallback.schemaVersion && typeof next?.enabled === "boolean"
-        ? next.enabled
-        : fallbackPreference.enabled,
-      anchor,
-      offset: typeof next?.offset === "string" ? next.offset : fallbackPreference.offset,
-      scale: typeof next?.scale === "number" ? Math.min(150, Math.max(50, next.scale)) : fallbackPreference.scale,
-      opacity: typeof next?.opacity === "number" ? Math.min(100, Math.max(25, next.opacity)) : fallbackPreference.opacity,
-    }];
-  })) as Record<TuiUtilityId, TuiUtilityPreference>;
-  return { schemaVersion: fallback.schemaVersion, utilities };
+function normalizeUtilitySettings(settings: UtilitySettings | null | undefined): UtilitySettings {
+  return mergeUtilitySettings(settings, createDefaultUtilitySettings());
 }
 
-function isTauriRuntime() {
+function isTauriRuntime(): boolean {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 }
 
 function previewSnapshot(): TuiSnapshot {
-  const account: TuiAccount = {
-    id: "offline:preview",
-    username: "PreviewPlayer",
-    uuid: "00000000000000000000000000000000",
-    kind: "offline",
-    badge: "unofficial",
-    ready: true,
-    selected: true,
-  };
   return {
-    platform: "UI Preview",
-    dataDirectory: "~/.opus-launcher",
+    platform: "macOS • Apple Silicon (ARM64)",
+    dataDirectory: "/Users/opus/Library/Application Support/opus",
     minecraftReady: true,
-    minecraftStatus: "Forge 1.8.9 preview state",
+    minecraftStatus: "Minecraft 1.8.9 verified",
     optifineReady: true,
-    optifineStatus: "OptiFine HD U M5 preview state",
-    javaStatus: "Java 8 preview state",
-    accountStored: false,
+    optifineStatus: "OptiFine 1.8.9 HD U M5 ready",
+    javaStatus: "Java 8 Zulu verified",
+    accountStored: true,
     gameLaunchReady: true,
-    gameLaunchStatus: "Packaged game launcher ready",
+    gameLaunchStatus: "Ready for launch",
     buildEdition: "unified",
-    offlineProfile: { username: account.username, valid: true },
-    accounts: [account],
-    selectedAccountId: account.id,
+    offlineProfile: null,
+    accounts: [
+      {
+        id: "preview-ms",
+        username: "OpusUser",
+        uuid: "00000000-0000-0000-0000-000000000001",
+        kind: "microsoft",
+        badge: "MICROSOFT",
+        ready: true,
+        selected: true,
+      },
+    ],
+    selectedAccountId: "preview-ms",
     activeLaunches: 0,
     activeAccountIds: [],
-    developerTestProfile: { available: false, active: false, simulationActive: false },
+    developerTestProfile: {
+      available: false,
+      active: false,
+      simulationActive: false,
+    },
   };
-}
-
-function applyAccountCatalog(
-  snapshot: TuiSnapshot,
-  accounts: TuiAccount[],
-  selectedAccountId: string | null,
-): TuiSnapshot {
-  const selectedId = selectedAccountId && accounts.some((account) => account.id === selectedAccountId)
-    ? selectedAccountId
-    : accounts[0]?.id ?? null;
-  const normalizedAccounts = accounts.map((account) => ({
-    ...account,
-    selected: account.id === selectedId,
-  }));
-  const offline = normalizedAccounts.find((account) => account.kind === "offline");
-  return {
-    ...snapshot,
-    accounts: normalizedAccounts,
-    selectedAccountId: selectedId,
-    accountStored: normalizedAccounts.some((account) => account.kind === "microsoft" && account.ready),
-    offlineProfile: offline ? { username: offline.username, valid: offline.ready } : null,
-  };
-}
-
-function mergeAccount(snapshot: TuiSnapshot, account: TuiAccount): TuiSnapshot {
-  const accounts = snapshot.accounts.some((current) => current.id === account.id)
-    ? snapshot.accounts.map((current) => current.id === account.id ? account : current)
-    : [...snapshot.accounts, account];
-  return applyAccountCatalog(snapshot, accounts, account.selected ? account.id : snapshot.selectedAccountId);
-}
-
-function selectSnapshotAccount(snapshot: TuiSnapshot, accountId: string): TuiSnapshot {
-  return applyAccountCatalog(snapshot, snapshot.accounts, accountId);
 }
 
 export default function App() {
@@ -253,18 +200,23 @@ export default function App() {
   const [utilitySettings, setUtilitySettings] = useState<UtilitySettings>(createDefaultUtilitySettings);
   const [utilitySettingsLoaded, setUtilitySettingsLoaded] = useState(false);
   const [utilitySaveStatus, setUtilitySaveStatus] = useState<"loading" | "saved" | "saving" | "error">("loading");
-  const [installProgress, setInstallProgress] = useState<InstallProgressEvent | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const [installProgress, setInstallProgress] = useState<TuiInstallProgress | null>(null);
   const [loginCancelling, setLoginCancelling] = useState(false);
   const [runningSessions, setRunningSessions] = useState<Record<string, string>>({});
   const [instances, setInstances] = useState<RunningInstance[]>([]);
   const [skin, setSkin] = useState<AccountSkin | null>(null);
+  const [skinCache, setSkinCache] = useState<Record<string, AccountSkin>>({});
   const [skinLoading, setSkinLoading] = useState(false);
   const skinRequestRef = useRef(0);
   const [offlineUsername, setOfflineUsername] = useState("");
   const [optifineSourcePath, setOptifineSourcePath] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [removalTarget, setRemovalTarget] = useState<TuiAccount | null>(null);
+  const [removalPending, setRemovalPending] = useState(false);
+  const [removalError, setRemovalError] = useState<string | null>(null);
+  const removalInFlight = useRef(false);
   const utilitySettingsHydrated = useRef(false);
   const finishedSessions = useRef(new Set<string>());
   const knownSessions = useRef(new Set<string>());
@@ -277,7 +229,6 @@ export default function App() {
       setUtilitySettings(createDefaultUtilitySettings());
       setUtilitySettingsLoaded(true);
       setUtilitySaveStatus("saved");
-      setNotice("Browser UI preview: backend actions are available in the Tauri desktop build.");
       return true;
     }
     try {
@@ -306,7 +257,7 @@ export default function App() {
       const next = await invoke<RunningInstance[]>("list_instances");
       setInstances(next);
     } catch {
-      // A transient list failure should not surface as a launcher error.
+      // ignore transient list error
     }
   }, []);
 
@@ -321,62 +272,6 @@ export default function App() {
     return () => window.clearInterval(timer);
   }, [refreshInstances]);
 
-  const selectedAccountId = snapshot?.selectedAccountId ?? null;
-  const selectedAccountUuid = snapshot?.accounts.find((account) => account.id === selectedAccountId)?.uuid ?? null;
-  useEffect(() => {
-    if (!isTauriRuntime()) {
-      setSkin(null);
-      return;
-    }
-    if (!selectedAccountId) {
-      setSkin(null);
-      return;
-    }
-    const requestId = skinRequestRef.current + 1;
-    skinRequestRef.current = requestId;
-    setSkinLoading(true);
-    void invoke<AccountSkin>("account_skin", { uuid: selectedAccountUuid ?? "" })
-      .then((next) => {
-        if (skinRequestRef.current === requestId) setSkin(next);
-      })
-      .catch(() => {
-        if (skinRequestRef.current === requestId) setSkin(null);
-      })
-      .finally(() => {
-        if (skinRequestRef.current === requestId) setSkinLoading(false);
-      });
-  }, [selectedAccountId, selectedAccountUuid]);
-
-  useEffect(() => {
-    if (!notice) return;
-    const timer = window.setTimeout(() => setNotice(null), 6500);
-    return () => window.clearTimeout(timer);
-  }, [notice]);
-
-  useEffect(() => {
-    if (!utilitySettingsLoaded) {
-      return;
-    }
-    if (!utilitySettingsHydrated.current) {
-      utilitySettingsHydrated.current = true;
-      return;
-    }
-    setUtilitySaveStatus("saving");
-    const timer = window.setTimeout(() => {
-      if (!isTauriRuntime()) {
-        setUtilitySaveStatus("saved");
-        return;
-      }
-      void invoke("save_utility_settings", { settings: utilitySettings })
-        .then(() => setUtilitySaveStatus("saved"))
-        .catch((reason) => {
-          setUtilitySaveStatus("error");
-          setError(String(reason));
-        });
-    }, 360);
-    return () => window.clearTimeout(timer);
-  }, [utilitySettings, utilitySettingsLoaded]);
-
   useEffect(() => {
     if (!isTauriRuntime()) return;
     let disposed = false;
@@ -386,12 +281,6 @@ export default function App() {
       const result = event.payload;
       if (!result.simulated && !knownSessions.current.delete(result.sessionId)) {
         finishedSessions.current.add(result.sessionId);
-      }
-      if (result.simulated) {
-        setSnapshot((current) => current ? {
-          ...current,
-          developerTestProfile: { ...current.developerTestProfile, simulationActive: false },
-        } : current);
       }
       setRunningSessions((current) => {
         if (!(result.accountId in current)) return current;
@@ -404,207 +293,354 @@ export default function App() {
         activeLaunches: current.activeAccountIds.includes(result.accountId)
           ? Math.max(0, current.activeLaunches - 1)
           : current.activeLaunches,
-        activeAccountIds: current.activeAccountIds.filter((accountId) => accountId !== result.accountId),
+        activeAccountIds: current.activeAccountIds.filter((id) => id !== result.accountId),
+        developerTestProfile: result.simulated
+          ? { ...current.developerTestProfile, simulationActive: false }
+          : current.developerTestProfile,
       } : current);
-      const detail = `${result.simulated ? "Developer test" : "Minecraft"}: ${result.message}${result.logDirectory ? ` Logs: ${result.logDirectory}` : ""}`;
+      const detail = `${result.simulated ? "Developer test" : "Minecraft"}: ${result.message}`;
       if (result.outcome === "failed") setError(detail);
       else setNotice(detail);
       void refreshInstances();
     }).then((dispose) => {
       if (disposed) dispose();
       else unlisten = dispose;
-    }).catch(() => undefined);
-    return () => {
-      disposed = true;
-      unlisten?.();
-    };
-  }, []);
+    }).catch((reason) => setError(String(reason)));
+    return () => { disposed = true; unlisten?.(); };
+  }, [refreshInstances]);
 
   useEffect(() => {
     if (!isTauriRuntime()) return;
     let disposed = false;
     let unlisten: (() => void) | undefined;
-    void listen<InstallProgressEvent>("opus://install-progress", (event) => {
+    void listen<TuiInstallProgress>("opus://install-progress", (event) => {
       if (!disposed) setInstallProgress(event.payload);
     }).then((dispose) => {
       if (disposed) dispose();
       else unlisten = dispose;
-    }).catch(() => undefined);
-    return () => {
-      disposed = true;
-      unlisten?.();
-    };
+    }).catch((reason) => setError(String(reason)));
+    return () => { disposed = true; unlisten?.(); };
   }, []);
 
-  const run = useCallback(async (name: string, action: () => Promise<void>) => {
-    setBusy(name);
+  const selectedAccountId = snapshot?.selectedAccountId ?? null;
+  const selectedAccountUuid = snapshot?.accounts.find((account) => account.id === selectedAccountId)?.uuid ?? null;
+
+  // Pre-fetch & cache skins for all accounts in the background
+  useEffect(() => {
+    if (!isTauriRuntime() || !snapshot?.accounts) return;
+    for (const acc of snapshot.accounts) {
+      if (!skinCache[acc.id]) {
+        void invoke<AccountSkin>("account_skin", { uuid: acc.uuid ?? "" })
+          .then((loaded) => {
+            setSkinCache((prev) => ({ ...prev, [acc.id]: loaded }));
+          })
+          .catch(() => {});
+      }
+    }
+  }, [snapshot?.accounts, skinCache]);
+
+  // Update selected skin smoothly using cache whenever available
+  useEffect(() => {
+    if (!isTauriRuntime() || !selectedAccountId) {
+      setSkin(null);
+      return;
+    }
+
+    if (skinCache[selectedAccountId]) {
+      setSkin(skinCache[selectedAccountId]);
+      setSkinLoading(false);
+      return;
+    }
+
+    const requestId = skinRequestRef.current + 1;
+    skinRequestRef.current = requestId;
+    setSkinLoading(true);
+
+    void invoke<AccountSkin>("account_skin", { uuid: selectedAccountUuid ?? "" })
+      .then((next) => {
+        if (skinRequestRef.current === requestId) {
+          setSkin(next);
+          setSkinCache((prev) => ({ ...prev, [selectedAccountId]: next }));
+        }
+      })
+      .catch(() => {
+        if (skinRequestRef.current === requestId) setSkin(null);
+      })
+      .finally(() => {
+        if (skinRequestRef.current === requestId) setSkinLoading(false);
+      });
+  }, [selectedAccountId, selectedAccountUuid, skinCache]);
+
+  useEffect(() => {
+    if (!notice) return;
+    const timer = window.setTimeout(() => setNotice(null), 6500);
+    return () => window.clearTimeout(timer);
+  }, [notice]);
+
+  useEffect(() => {
+    if (!utilitySettingsLoaded) return;
+    if (!utilitySettingsHydrated.current) {
+      utilitySettingsHydrated.current = true;
+      return;
+    }
+    setUtilitySaveStatus("saving");
+    const timer = window.setTimeout(() => {
+      if (!isTauriRuntime()) {
+        setUtilitySaveStatus("saved");
+        return;
+      }
+      invoke("save_utility_settings", { settings: utilitySettings })
+        .then(() => setUtilitySaveStatus("saved"))
+        .catch(() => setUtilitySaveStatus("error"));
+    }, 350);
+    return () => window.clearTimeout(timer);
+  }, [utilitySettings, utilitySettingsLoaded]);
+
+  const onUtilityPreferenceChange = useCallback(
+    (id: TuiUtilityId, update: Partial<TuiUtilityPreference>) => {
+      setUtilitySettings((prev) => ({
+        ...prev,
+        utilities: {
+          ...prev.utilities,
+          [id]: {
+            ...prev.utilities[id],
+            ...update,
+          },
+        },
+      }));
+    },
+    [],
+  );
+
+  const launchMinecraft = useCallback(async (accountId: string) => {
+    setBusy("launching");
     setError(null);
-    setNotice(null);
     try {
-      await action();
+      const started = await invoke<GameLaunchStarted>("launch_game", { settings, accountId });
+      if (finishedSessions.current.delete(started.sessionId)) {
+        await refreshInstances();
+        return;
+      }
+      knownSessions.current.add(started.sessionId);
+      setRunningSessions((prev) => ({ ...prev, [started.accountId]: started.sessionId }));
+      setNotice("Minecraft instance is starting. Its status will update when it exits.");
+      await refresh();
+      await refreshInstances();
     } catch (reason) {
       setError(String(reason));
     } finally {
       setBusy(null);
     }
-  }, []);
+  }, [settings, refresh, refreshInstances]);
 
-  const startMicrosoftLogin = useCallback(() => {
-    void run("login", async () => {
-      if (!isTauriRuntime()) throw new Error("Microsoft sign-in is available in the Tauri desktop build.");
-      setLoginCancelling(false);
-      const account = await invoke<AccountResult>("login_with_microsoft");
-      setSnapshot((current) => current ? mergeAccount(current, account.account) : current);
-      setNotice(`Connected as ${account.profile}. Java Edition ownership verified.`);
-    });
-  }, [run]);
+  const onKillInstance = useCallback(async (sessionId: string) => {
+    if (!window.confirm("Stop this Minecraft instance? Unsaved in-game progress may be lost.")) return;
+    try {
+      await invoke("kill_instance", { sessionId });
+      setNotice(`Stop signal sent to session ${sessionId}.`);
+      await refresh();
+      await refreshInstances();
+    } catch (reason) {
+      setError(String(reason));
+    }
+  }, [refresh, refreshInstances]);
 
-  const cancelMicrosoftLogin = useCallback(() => {
-    setLoginCancelling(true);
-    void invoke<boolean>("cancel_microsoft_login")
-      .then((signalled) => {
-        if (signalled) setNotice("Cancelling Microsoft sign-in...");
-      })
-      .catch((reason) => setError(String(reason)))
-      .finally(() => setLoginCancelling(false));
-  }, []);
-
-  const installMinecraft = useCallback(() => {
-    void run("install", async () => {
-      if (!isTauriRuntime()) throw new Error("Installation is available in the Tauri desktop build.");
-      setInstallProgress(null);
+  const installMinecraft = useCallback(async () => {
+    setBusy("installing");
+    setError(null);
+    setInstallProgress(null);
+    try {
       const result = await invoke<InstallResult>("install_minecraft");
-      setSnapshot((current) => current ? {
-        ...current,
-        minecraftReady: true,
-        minecraftStatus: `Forge ${result.minecraftVersion} verified`,
-        optifineReady: result.optifineReady,
-        optifineStatus: result.optifineReady ? "OptiFine 1.8.9 HD U M5 verified" : "Import your local OptiFine 1.8.9 HD U M5 JAR to launch",
-        javaStatus: `Java ${result.javaVersion} ready`,
-      } : current);
-      setNotice(`Forge 1.8.9 is ready. ${result.downloadedFiles} downloaded, ${result.cachedFiles} verified.`);
-      void refresh();
-    });
-  }, [refresh, run]);
+      setNotice(result.optifineReady
+        ? `Minecraft ${result.minecraftVersion} verified; ${result.downloadedFiles} downloaded, ${result.cachedFiles} reused.`
+        : `Minecraft ${result.minecraftVersion} installed. Import your own OptiFine 1.8.9 HD U M5 JAR to enable launch.`);
+      await refresh();
+    } catch (reason) {
+      setError(String(reason));
+    } finally {
+      setBusy(null);
+      setInstallProgress(null);
+    }
+  }, [refresh]);
 
-  const importOptiFine = useCallback(() => {
-    void run("optifine", async () => {
-      if (!isTauriRuntime()) throw new Error("OptiFine import is available in the Tauri desktop build.");
-      if (!optifineSourcePath.trim()) throw new Error("Enter the local OptiFine 1.8.9 HD U M5 JAR path first.");
+  const importOptiFine = useCallback(async () => {
+    if (!optifineSourcePath.trim()) {
+      setError("Enter the local OptiFine 1.8.9 HD U M5 JAR path first.");
+      return;
+    }
+    setBusy("importing");
+    setError(null);
+    try {
       const result = await invoke<OptiFineImportResult>("import_optifine", { sourcePath: optifineSourcePath.trim() });
+      setNotice(`${result.fileName} verified and added to the Opus runtime.`);
       setOptifineSourcePath("");
-      setSnapshot((current) => current ? { ...current, optifineReady: true, optifineStatus: `${result.fileName} verified` } : current);
-      setNotice(`${result.fileName} was verified and added to this Opus runtime.`);
-      void refresh();
-    });
-  }, [optifineSourcePath, refresh, run]);
+      await refresh();
+    } catch (reason) {
+      setError(String(reason));
+    } finally {
+      setBusy(null);
+    }
+  }, [optifineSourcePath, refresh]);
 
-  const launchMinecraft = useCallback((accountId: string) => {
-    void run("launch", async () => {
-      if (!isTauriRuntime()) throw new Error("Minecraft launch is available in the Tauri desktop build.");
-      const started = await invoke<GameLaunchStarted>("launch_game", { settings, accountId });
-      if (finishedSessions.current.delete(started.sessionId)) return;
-      knownSessions.current.add(started.sessionId);
-      setRunningSessions((current) => ({ ...current, [started.accountId]: started.sessionId }));
-      setSnapshot((current) => current ? {
-        ...current,
-        activeLaunches: current.activeAccountIds.includes(started.accountId)
-          ? current.activeLaunches
-          : current.activeLaunches + 1,
-        activeAccountIds: current.activeAccountIds.includes(started.accountId)
-          ? current.activeAccountIds
-          : [...current.activeAccountIds, started.accountId],
-      } : current);
-      setNotice("Minecraft instance is starting. You can select another identity and launch it now.");
-      void refreshInstances();
-      if (started.accountId !== accountId) void refresh();
-    });
-  }, [refresh, refreshInstances, run, settings]);
-
-  const saveSettings = useCallback(() => {
-    void run("settings", async () => {
-      if (!isTauriRuntime()) throw new Error("Settings persistence is available in the Tauri desktop build.");
+  const saveSettings = useCallback(async () => {
+    setBusy("saving");
+    setError(null);
+    try {
       await invoke("save_settings", { settings });
       setNotice("Settings saved.");
-    });
-  }, [run, settings]);
+      await refresh();
+    } catch (reason) {
+      setError(String(reason));
+    } finally {
+      setBusy(null);
+    }
+  }, [settings, refresh]);
 
-  const saveOfflineProfile = useCallback(() => {
-    void run("offline-profile", async () => {
-      if (!isTauriRuntime()) throw new Error("Offline profile persistence is available in the Tauri desktop build.");
-      if (!minecraftUsernamePattern.test(offlineUsername)) throw new Error("Use 3-16 letters, numbers, or underscores.");
-      const account = await invoke<TuiAccount>("save_offline_profile", { username: offlineUsername });
-      setSnapshot((current) => current ? mergeAccount(current, account) : current);
-      setOfflineUsername("");
-      setNotice(`Unofficial profile ${account.username} was added to the launch list.`);
-    });
-  }, [offlineUsername, run]);
-
-  const selectAccount = useCallback((accountId: string) => {
-    if (snapshot?.selectedAccountId === accountId) return;
-    void run("account-select", async () => {
-      if (!isTauriRuntime()) {
-        setSnapshot((current) => current ? selectSnapshotAccount(current, accountId) : current);
-        return;
+  const handleSettingsChange = useCallback(
+    (nextSettings: TuiSettings) => {
+      setSettings(nextSettings);
+      if (nextSettings.launchProfileType !== settings.launchProfileType && isTauriRuntime()) {
+        invoke("save_settings", { settings: nextSettings }).catch(console.error);
       }
-      const account = await invoke<TuiAccount>("select_account", { accountId });
-      setSnapshot((current) => current ? mergeAccount(current, account) : current);
-      setNotice(`${account.username} is selected for the next launch.`);
+    },
+    [settings.launchProfileType],
+  );
+
+  const startMicrosoftLogin = useCallback(async () => {
+    setBusy("logging in");
+    setError(null);
+    try {
+      const result = await invoke<AccountResult>("login_with_microsoft");
+      setNotice(`Signed in as ${result.account.username}. Java Edition ownership verified.`);
+      await refresh();
+    } catch (reason) {
+      setError(String(reason));
+    } finally {
+      setBusy(null);
+    }
+  }, [refresh]);
+
+  const cancelMicrosoftLogin = useCallback(async () => {
+    setLoginCancelling(true);
+    try {
+      const signalled = await invoke<boolean>("cancel_microsoft_login");
+      if (signalled) setNotice("Cancelling Microsoft sign-in...");
+    } catch (reason) {
+      setError(String(reason));
+    } finally {
+      setLoginCancelling(false);
+    }
+  }, []);
+
+  const saveOfflineProfile = useCallback(async () => {
+    if (!offlineUsername.trim()) return;
+    setBusy("saving profile");
+    setError(null);
+    try {
+      await invoke("save_offline_profile", { username: offlineUsername.trim() });
+      setNotice(`Offline profile '${offlineUsername.trim()}' created.`);
+      setOfflineUsername("");
+      await refresh();
+    } catch (reason) {
+      setError(String(reason));
+    } finally {
+      setBusy(null);
+    }
+  }, [offlineUsername, refresh]);
+
+  // OPTIMISTIC ZERO-LATENCY ACCOUNT SWITCHING
+  const selectAccount = useCallback(async (accountId: string) => {
+    setSnapshot((prev) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        selectedAccountId: accountId,
+        accounts: prev.accounts.map((acc) => ({
+          ...acc,
+          selected: acc.id === accountId,
+        })),
+      };
     });
-  }, [run, snapshot?.selectedAccountId]);
+    try {
+      await invoke("select_account", { accountId });
+    } catch (reason) {
+      setError(String(reason));
+      void refresh();
+    }
+  }, [refresh]);
 
   const removeAccount = useCallback((accountId: string) => {
-    void run("account-remove", async () => {
-      if (!isTauriRuntime()) throw new Error("Account management is available in the Tauri desktop build.");
+    const account = snapshot?.accounts.find(candidate => candidate.id === accountId);
+    if (!account || busy !== null || removalInFlight.current
+        || snapshot?.activeAccountIds.includes(accountId)) return;
+    setRemovalError(null);
+    setRemovalTarget(account);
+  }, [busy, snapshot]);
+
+  const confirmAccountRemoval = useCallback(async () => {
+    if (!removalTarget || removalInFlight.current) return;
+    const { id: accountId, username } = removalTarget;
+    removalInFlight.current = true;
+    setRemovalPending(true);
+    setRemovalError(null);
+    setBusy("removing profile");
+    try {
       const removed = await invoke<boolean>("remove_account", { accountId });
-      if (!removed) throw new Error("The selected account no longer exists.");
+      if (!removed) throw new Error("This profile no longer exists in the native catalog. Refresh the account list after cancelling.");
+      // Only change the visible catalog after the native operation succeeds.
+      // Keep this acknowledged state even if the subsequent refresh fails.
+      setSnapshot(prev => {
+        if (!prev) return prev;
+        const remaining = prev.accounts.filter(account => account.id !== accountId);
+        const selectedAccountId = prev.selectedAccountId === accountId ? remaining[0]?.id ?? null : prev.selectedAccountId;
+        return { ...prev, selectedAccountId,
+          accounts: remaining.map(account => ({ ...account, selected: account.id === selectedAccountId })) };
+      });
+      setRemovalTarget(null);
+      setNotice(`Profile '${username}' removed from this Launcher.`);
       await refresh();
-      setNotice("The identity and its saved credential were removed from Opus Launcher.");
-    });
-  }, [refresh, run]);
+    } catch (reason) {
+      setRemovalError(`${String(reason)} Removal was not confirmed. You can try again or cancel.`);
+    } finally {
+      removalInFlight.current = false;
+      setRemovalPending(false);
+      setBusy(null);
+    }
+  }, [refresh, removalTarget]);
 
-  const runDeveloperSimulation = useCallback(() => {
-    void run("developer-simulation", async () => {
-      if (!isTauriRuntime()) throw new Error("Developer simulation is available in the Tauri desktop build.");
-      setSnapshot((current) => current ? { ...current, developerTestProfile: { ...current.developerTestProfile, simulationActive: true } } : current);
-      try {
-        const started = await invoke<GameLaunchStarted>("simulate_developer_game");
-        if (!started.simulated) throw new Error("Opus did not confirm a developer test session.");
-        setNotice("Developer test session is running. Minecraft was not launched.");
-      } catch (reason) {
-        setSnapshot((current) => current ? { ...current, developerTestProfile: { ...current.developerTestProfile, simulationActive: false } } : current);
-        throw reason;
+  const runDeveloperSimulation = useCallback(async () => {
+    const profile = snapshot?.developerTestProfile;
+    if (!profile?.available || profile.simulationActive) return;
+    setBusy("simulation");
+    try {
+      if (profile.active) {
+        await invoke("set_developer_test_profile", { active: false });
+        setNotice("Developer test profile disabled.");
+      } else {
+        await invoke("set_developer_test_profile", { active: true });
+        await invoke<GameLaunchStarted>("simulate_developer_game");
+        setNotice("Developer simulation started; Minecraft was not launched.");
       }
-    });
-  }, [run]);
-
-  const onKillInstance = useCallback((sessionId: string) => {
-    void run("kill-instance", async () => {
-      if (!isTauriRuntime()) throw new Error("Instance control is available in the Tauri desktop build.");
-      await invoke("kill_instance", { sessionId });
-      setNotice("Sent stop signal to the instance.");
-      void refreshInstances();
-    });
-  }, [refreshInstances, run]);
-
-  const onBack = useCallback(() => setPage("home"), []);
+      await refresh();
+    } catch (reason) {
+      setError(String(reason));
+    } finally {
+      setBusy(null);
+    }
+  }, [refresh, snapshot?.developerTestProfile]);
 
   const onQuit = useCallback(() => {
     if (isTauriRuntime()) {
       void getCurrentWindow().close().catch((reason) => setError(String(reason)));
-    } else {
-      setNotice("Q is wired to close the desktop window in the Tauri build.");
     }
   }, []);
 
-  const onUtilityPreferenceChange = useCallback((id: TuiUtilityId, update: Partial<TuiUtilityPreference>) => {
-    setUtilitySettings((current) => ({
-      ...current,
-      utilities: { ...current.utilities, [id]: { ...current.utilities[id], ...update } },
-    }));
+  const onBack = useCallback(() => {
+    setPage("home");
   }, []);
 
   return (
+    <>
     <LauncherTui
       page={page}
       snapshot={snapshot}
@@ -620,6 +656,7 @@ export default function App() {
       runningSessions={runningSessions}
       instances={instances}
       skin={skin}
+      skinCache={skinCache}
       skinLoading={skinLoading}
       offlineUsername={offlineUsername}
       optifineSourcePath={optifineSourcePath}
@@ -640,12 +677,15 @@ export default function App() {
       onQuit={onQuit}
       onClearError={() => setError(null)}
       onClearNotice={() => setNotice(null)}
-      onSettingsChange={setSettings}
+      onSettingsChange={handleSettingsChange}
       onOfflineUsernameChange={setOfflineUsername}
       onOptiFineSourcePathChange={setOptifineSourcePath}
       onUtilityPreferenceChange={onUtilityPreferenceChange}
     />
+    {removalTarget ? <RemoveAccountDialog username={removalTarget.username}
+      pending={removalPending} error={removalError}
+      onCancel={() => { if (!removalInFlight.current) setRemovalTarget(null); }}
+      onConfirm={() => { void confirmAccountRemoval(); }} /> : null}
+    </>
   );
 }
-
-export type { BuildEdition, DeveloperTestProfile };

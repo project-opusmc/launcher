@@ -1,26 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
-import {
-  CommandBar,
-  KeyValueList,
-  LogView,
-  MenuList,
-  Pane,
-  ProgressBar,
-  StatusText,
-  type KeyValueRow,
-  type MenuItem,
-} from "./primitives";
-import "./tui.css";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from "react";
+import { AccountHeadAvatar } from "./AccountHeadAvatar";
+import "./liquid-glass.css";
 
-export type TuiPage =
-  | "home"
-  | "installation"
-  | "account"
-  | "modules"
-  | "utilities"
-  | "settings"
-  | "logs";
-
+export type TuiPage = "home" | "installation" | "account" | "modules" | "utilities" | "settings" | "logs";
 export type TuiUtilityId = "fps" | "cps" | "memory" | "coordinates" | "clock" | "keystrokes";
 export type TuiUtilityAnchor = "top-left" | "top-right" | "bottom-left" | "bottom-right";
 
@@ -83,18 +65,15 @@ export type TuiSnapshot = {
   selectedAccountId: string | null;
   activeLaunches: number;
   activeAccountIds: string[];
-  developerTestProfile: {
-    available: boolean;
-    active: boolean;
-    simulationActive: boolean;
-  };
+  developerTestProfile: { available: boolean; active: boolean; simulationActive: boolean };
 };
 
+export type LaunchProfileType = "standalone" | "forge";
 export type TuiSettings = {
   maxMemoryMib: number;
   closeLauncherOnGameStart: boolean;
+  launchProfileType?: LaunchProfileType;
 };
-
 export type TuiInstallProgress = {
   phase: string;
   completedFiles: number;
@@ -103,7 +82,68 @@ export type TuiInstallProgress = {
   cachedFiles: number;
 };
 
-type LauncherTuiProps = {
+export type LauncherTheme = "azure" | "emerald" | "violet" | "amber" | "rose" | "monochrome";
+export type LauncherBackdrop = "video" | "overworld" | "filament" | "void";
+export type LauncherAppearance = {
+  theme: LauncherTheme;
+  backdrop: LauncherBackdrop;
+  glassBlur: number;
+  glassOpacity: number;
+};
+
+const DEFAULT_APPEARANCE: LauncherAppearance = { theme: "azure", backdrop: "video", glassBlur: 14, glassOpacity: 76 };
+const navigation: readonly { id: TuiPage; label: string }[] = [
+  { id: "home", label: "Home" },
+  { id: "installation", label: "Install" },
+  { id: "account", label: "Account" },
+  { id: "modules", label: "Modules" },
+  { id: "utilities", label: "Utilities" },
+  { id: "settings", label: "Settings" },
+  { id: "logs", label: "Logs" },
+];
+const themeOptions: readonly { id: LauncherTheme; label: string }[] = [
+  { id: "azure", label: "Slate" },
+  { id: "emerald", label: "Moss" },
+  { id: "violet", label: "Dusk" },
+  { id: "amber", label: "Sand" },
+  { id: "rose", label: "Clay" },
+  { id: "monochrome", label: "Mono" },
+];
+const backdropOptions: readonly { id: LauncherBackdrop; label: string; detail: string }[] = [
+  { id: "video", label: "Night sky", detail: "Quiet motion" },
+  { id: "overworld", label: "Overworld", detail: "Still image" },
+  { id: "filament", label: "Filament", detail: "Abstract still" },
+  { id: "void", label: "No media", detail: "Solid canvas" },
+];
+const utilityAnchorLabels: Record<TuiUtilityAnchor, string> = {
+  "top-left": "Top left",
+  "top-right": "Top right",
+  "bottom-left": "Bottom left",
+  "bottom-right": "Bottom right",
+};
+const logCategories = ["Launcher", "Authentication", "Installation", "Minecraft", "Opus"] as const;
+type LogCategory = (typeof logCategories)[number];
+type StatusTone = "normal" | "muted" | "success" | "warning" | "danger";
+
+function loadStoredAppearance(): LauncherAppearance {
+  try {
+    const raw = localStorage.getItem("opus_launcher_appearance_v1");
+    if (raw) {
+      const parsed = JSON.parse(raw) as Partial<LauncherAppearance>;
+      return {
+        theme: parsed.theme ?? DEFAULT_APPEARANCE.theme,
+        backdrop: parsed.backdrop ?? DEFAULT_APPEARANCE.backdrop,
+        glassBlur: typeof parsed.glassBlur === "number" ? parsed.glassBlur : DEFAULT_APPEARANCE.glassBlur,
+        glassOpacity: typeof parsed.glassOpacity === "number" ? parsed.glassOpacity : DEFAULT_APPEARANCE.glassOpacity,
+      };
+    }
+  } catch {
+    // Storage is optional in the browser preview and hardened runtimes.
+  }
+  return DEFAULT_APPEARANCE;
+}
+
+export type LauncherTuiProps = {
   page: TuiPage;
   snapshot: TuiSnapshot | null;
   settings: TuiSettings;
@@ -118,6 +158,7 @@ type LauncherTuiProps = {
   runningSessions: Record<string, string>;
   instances: readonly TuiInstance[];
   skin: TuiAccountSkin | null;
+  skinCache?: Record<string, TuiAccountSkin>;
   skinLoading: boolean;
   offlineUsername: string;
   optifineSourcePath: string;
@@ -144,36 +185,50 @@ type LauncherTuiProps = {
   onUtilityPreferenceChange: (id: TuiUtilityId, update: Partial<TuiUtilityPreference>) => void;
 };
 
-const utilityAnchorLabels: Record<TuiUtilityAnchor, string> = {
-  "top-left": "Top left",
-  "top-right": "Top right",
-  "bottom-left": "Bottom left",
-  "bottom-right": "Bottom right",
-};
-
-const logCategories = ["Launcher", "Authentication", "Installation", "Minecraft", "Opus"] as const;
-
 export default function LauncherTui(props: LauncherTuiProps) {
-  const [focusedPane, setFocusedPane] = useState(0);
-  const [playIndex, setPlayIndex] = useState(0);
-  const [installationIndex, setInstallationIndex] = useState(0);
-  const [settingsIndex, setSettingsIndex] = useState(0);
+  const [appearance, setAppearance] = useState<LauncherAppearance>(loadStoredAppearance);
   const [selectedUtilityId, setSelectedUtilityId] = useState<TuiUtilityId>(props.utilities[0]?.id ?? "fps");
-  const [logCategory, setLogCategory] = useState<(typeof logCategories)[number]>("Launcher");
-  const paneRefs = useRef<Array<HTMLElement | null>>([]);
+  const [logCategory, setLogCategory] = useState<LogCategory>("Launcher");
+  const [copyLogStatus, setCopyLogStatus] = useState<"idle" | "copied" | "failed">("idle");
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+
+  useEffect(() => {
+    try { localStorage.setItem("opus_launcher_appearance_v1", JSON.stringify(appearance)); } catch { /* optional */ }
+  }, [appearance]);
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    const motionPreference = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const syncPlayback = () => {
+      if (!document.hidden && !motionPreference.matches) void video.play().catch(() => undefined);
+      else video.pause();
+    };
+    syncPlayback();
+    document.addEventListener("visibilitychange", syncPlayback);
+    motionPreference.addEventListener("change", syncPlayback);
+    return () => {
+      document.removeEventListener("visibilitychange", syncPlayback);
+      motionPreference.removeEventListener("change", syncPlayback);
+      video.pause();
+    };
+  }, [appearance.backdrop, props.page]);
+  useEffect(() => {
+    if (!props.utilities.some((utility) => utility.id === selectedUtilityId) && props.utilities[0]) setSelectedUtilityId(props.utilities[0].id);
+  }, [props.utilities, selectedUtilityId]);
 
   const snapshotPending = props.snapshot === null && props.error === null;
   const snapshotUnavailable = props.snapshot === null && props.error !== null;
   const developerProfile = props.snapshot?.developerTestProfile;
   const developerTestProfileActive = developerProfile?.active ?? false;
   const developerSimulationActive = developerProfile?.simulationActive ?? false;
-  const installed = Boolean(props.snapshot?.minecraftReady) && !developerTestProfileActive;
-  const gameLaunchReady = Boolean(props.snapshot?.gameLaunchReady) && !developerTestProfileActive;
+  const minecraftReady = Boolean(props.snapshot?.minecraftReady) && !developerTestProfileActive;
   const optifineReady = Boolean(props.snapshot?.optifineReady) && !developerTestProfileActive;
+  const gameLaunchReady = Boolean(props.snapshot?.gameLaunchReady) && !developerTestProfileActive;
+  const opusClientVerified = minecraftReady && optifineReady && gameLaunchReady;
   const accounts = props.snapshot?.accounts ?? [];
   const selectedAccount = accounts.find((account) => account.id === props.snapshot?.selectedAccountId)
-    ?? accounts.find((account) => account.selected)
-    ?? null;
+    ?? accounts.find((account) => account.selected) ?? accounts[0] ?? null;
+  const selectedAccountSkin = selectedAccount ? (props.skinCache?.[selectedAccount.id] ?? props.skin) : null;
   const activeAccountIds = useMemo(
     () => new Set([...(props.snapshot?.activeAccountIds ?? []), ...Object.keys(props.runningSessions)]),
     [props.runningSessions, props.snapshot?.activeAccountIds],
@@ -181,1369 +236,513 @@ export default function LauncherTui(props: LauncherTuiProps) {
   const activeLaunchCount = activeAccountIds.size;
   const selectedAccountRunning = selectedAccount ? activeAccountIds.has(selectedAccount.id) : false;
   const profileReady = Boolean(selectedAccount?.ready) && !developerTestProfileActive;
-  const readyToLaunch = installed && gameLaunchReady && optifineReady && profileReady;
+  const readyToLaunch = opusClientVerified && profileReady;
   const canLaunch = readyToLaunch && !selectedAccountRunning && props.busy === null;
   const enabledUtilityCount = useMemo(
     () => Object.values(props.utilityPreferences).filter((preference) => preference.enabled).length,
     [props.utilityPreferences],
   );
-  const selectedUtility = props.utilities.find((utility) => utility.id === selectedUtilityId) ?? props.utilities[0];
-  const selectedUtilityPreference = selectedUtility ? props.utilityPreferences[selectedUtility.id] : undefined;
-  const accountLabel = selectedAccount?.username ?? "NO IDENTITY";
-  const editionLabel = "UNIFIED CLIENT";
-  const buildLabel = import.meta.env.DEV ? "v0.0.1-dev" : "v0.0.1";
+  const selectedUtility = props.utilities.find((utility) => utility.id === selectedUtilityId) ?? props.utilities[0] ?? null;
+  const selectedUtilityPreference = selectedUtility ? props.utilityPreferences[selectedUtility.id] : null;
+  const runtimeState = snapshotPending ? "Checking" : snapshotUnavailable ? "Unavailable"
+    : developerTestProfileActive ? (developerSimulationActive ? "Simulating" : "Developer mode")
+      : activeLaunchCount > 0 ? `${activeLaunchCount} running` : readyToLaunch ? "Ready" : "Setup required";
+  const runtimeTone: StatusTone = snapshotUnavailable ? "danger" : snapshotPending ? "muted"
+    : readyToLaunch || activeLaunchCount > 0 ? "success" : "warning";
+  const primaryLabel = props.busy ? `${sentenceCase(props.busy)}…` : selectedAccountRunning ? "In game"
+    : developerTestProfileActive ? "Review developer mode" : canLaunch ? "Play"
+      : !opusClientVerified ? "Review installation" : !profileReady ? "Choose account" : "Play";
 
-  const runtimeState = snapshotPending
-    ? "CHECKING"
-    : snapshotUnavailable
-      ? "UNAVAILABLE"
-      : developerTestProfileActive
-        ? developerSimulationActive ? "SIMULATING" : "DEVELOPER"
-        : activeLaunchCount > 0
-          ? `${activeLaunchCount} RUNNING`
-          : readyToLaunch ? "READY" : "SETUP REQUIRED";
+  const handlePrimaryAction = useCallback(() => {
+    if (developerTestProfileActive) props.onNavigate("settings");
+    else if (canLaunch && selectedAccount) props.onLaunch(selectedAccount.id);
+    else if (!opusClientVerified) props.onNavigate("installation");
+    else if (!profileReady) props.onNavigate("account");
+  }, [canLaunch, developerTestProfileActive, opusClientVerified, profileReady, props, selectedAccount]);
 
-  const playItems = useMemo<readonly MenuItem[]>(() => [
-    { id: "account", shortcut: "1", label: "Accounts & profiles", value: `${accounts.length}`, tone: accounts.length > 0 ? "success" : "warning" },
-    { id: "installation", shortcut: "2", label: "Installation", value: installed ? "READY" : "MISSING", tone: installed ? "success" : "warning" },
-    { id: "modules", shortcut: "3", label: "Modules", value: `${enabledUtilityCount} ON`, tone: enabledUtilityCount > 0 ? "success" : "muted" },
-    { id: "settings", shortcut: "4", label: "Settings", value: `${props.settings.maxMemoryMib} MB`, tone: "normal" },
-    { id: "logs", shortcut: "5", label: "Logs", value: "OPEN", tone: "muted" },
-    { id: "quit", shortcut: "6", label: "Quit", disabled: props.busy !== null },
-  ], [
-    accounts.length,
-    enabledUtilityCount,
-    installed,
-    props.busy,
-    props.settings.maxMemoryMib,
-  ]);
-
-  const focusPane = useCallback((index: number) => {
-    const next = (index + 4) % 4;
-    setFocusedPane(next);
-    window.requestAnimationFrame(() => paneRefs.current[next]?.focus());
-  }, []);
-
-  const focusPaneInDirection = useCallback((key: string) => {
-    const panes = Array.from(document.querySelectorAll<HTMLElement>(".tui-screen-region .tui-pane"))
-      .filter((pane) => pane.getClientRects().length > 0);
-    if (panes.length === 0) {
-      return;
-    }
-    const activeElement = document.activeElement;
-    const current = panes.find((pane) => pane === activeElement || pane.contains(activeElement))
-      ?? panes[0];
-    const currentRect = current.getBoundingClientRect();
-    const currentCenter = {
-      x: currentRect.left + currentRect.width / 2,
-      y: currentRect.top + currentRect.height / 2,
-    };
-    const direction = key.replace("Arrow", "").toLowerCase();
-    const candidates = panes
-      .filter((pane) => pane !== current)
-      .map((pane) => {
-        const rect = pane.getBoundingClientRect();
-        const center = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
-        const deltaX = center.x - currentCenter.x;
-        const deltaY = center.y - currentCenter.y;
-        const inDirection = direction === "left" ? deltaX < -1
-          : direction === "right" ? deltaX > 1
-            : direction === "up" ? deltaY < -1
-              : deltaY > 1;
-        const primaryDistance = direction === "left" || direction === "right"
-          ? Math.abs(deltaX)
-          : Math.abs(deltaY);
-        const crossDistance = direction === "left" || direction === "right"
-          ? Math.abs(deltaY)
-          : Math.abs(deltaX);
-        return { pane, inDirection, score: primaryDistance + crossDistance * 2 };
-      })
-      .filter((candidate) => candidate.inDirection)
-      .sort((left, right) => left.score - right.score);
-    candidates[0]?.pane.focus();
-  }, []);
-
-  const activateLaunch = useCallback(() => {
-    if (selectedAccountRunning || props.busy !== null) {
-      return;
-    }
-    if (developerTestProfileActive) {
-      props.onRunDeveloperSimulation();
-      return;
-    }
-    if (canLaunch) {
-      if (selectedAccount) props.onLaunch(selectedAccount.id);
-      return;
-    }
-    if (!installed || !gameLaunchReady) {
-      props.onNavigate("installation");
-      return;
-    }
-    if (!optifineReady) {
-      props.onNavigate("settings");
-      setSettingsIndex(2);
-      return;
-    }
-    if (!profileReady) {
-      props.onNavigate("account");
-    }
-  }, [
-    canLaunch,
-    developerTestProfileActive,
-    gameLaunchReady,
-    installed,
-    optifineReady,
-    profileReady,
-    props,
-    selectedAccount,
-    selectedAccountRunning,
-  ]);
-
-  const activatePlayItem = useCallback((index: number) => {
-    const item = playItems[index];
-    if (!item || item.disabled) {
-      return;
-    }
-    switch (item.id) {
-      case "installation":
-      case "account":
-      case "modules":
-      case "settings":
-      case "logs":
-        props.onNavigate(item.id);
-        break;
-      case "quit":
-        props.onQuit();
-        break;
-    }
-  }, [activateLaunch, playItems, props]);
-
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      const target = event.target;
-      const editing = target instanceof HTMLInputElement
-        || target instanceof HTMLTextAreaElement
-        || target instanceof HTMLSelectElement
-        || (target instanceof HTMLElement && target.isContentEditable);
-
-      if (event.shiftKey && ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) {
-        event.preventDefault();
-        focusPaneInDirection(event.key);
-        return;
-      }
-
-      if (editing) {
-        if (event.key === "Escape" && target instanceof HTMLElement) {
-          target.blur();
-        }
-        return;
-      }
-
-      if ((event.key === "l" || event.key === "L") && props.busy === null) {
-        event.preventDefault();
-        activateLaunch();
-        return;
-      }
-
-      if ((event.key === "q" || event.key === "Q") && props.busy === null) {
-        event.preventDefault();
-        props.onQuit();
-        return;
-      }
-
-      if (/^[1-6]$/.test(event.key)) {
-        const index = Number(event.key) - 1;
-        event.preventDefault();
-        setPlayIndex(index);
-        if (props.page !== "home") {
-          props.onNavigate("home");
-        }
-        window.requestAnimationFrame(() => activatePlayItem(index));
-        return;
-      }
-
-      if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) {
-        const active = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-        const pane = active?.closest<HTMLElement>(".tui-pane")
-          ?? document.querySelector<HTMLElement>(".tui-pane.is-focused");
-        const items = pane
-          ? Array.from(pane.querySelectorAll<HTMLElement>("[data-tui-nav-item]:not(:disabled)"))
-          : [];
-        if (items.length > 0) {
-          const currentIndex = active ? items.indexOf(active) : -1;
-          const backwards = event.key === "ArrowLeft" || event.key === "ArrowUp";
-          const nextIndex = currentIndex === -1
-            ? backwards ? items.length - 1 : 0
-            : (currentIndex + (backwards ? -1 : 1) + items.length) % items.length;
-          event.preventDefault();
-          items[nextIndex]?.focus();
-          return;
-        }
-      }
-
-      if (props.page !== "home") {
-        if (event.key === "Escape") {
-          event.preventDefault();
-          props.onNavigate("home");
-        }
-        return;
-      }
-
-      if (event.key === "Tab" && event.shiftKey) {
-        event.preventDefault();
-        focusPane(focusedPane - 1);
-        return;
-      }
-      if (event.key === "Tab") {
-        event.preventDefault();
-        focusPane(focusedPane + 1);
-        return;
-      }
-      if (focusedPane === 0 && event.key === "Enter") {
-        event.preventDefault();
-        activatePlayItem(playIndex);
-      }
-    };
-
-    document.addEventListener("keydown", onKeyDown);
-    return () => document.removeEventListener("keydown", onKeyDown);
-  }, [activateLaunch, activatePlayItem, focusPane, focusPaneInDirection, focusedPane, playIndex, props]);
-
-  useEffect(() => {
-    if (props.page === "home") {
-      focusPane(0);
-    }
-  }, [focusPane, props.page]);
-
-  const systemRows: readonly KeyValueRow[] = [
-    { label: "Minecraft", value: installed ? "1.8.9" : snapshotPending ? "CHECKING" : "MISSING", tone: installed ? "success" : "warning" },
-    { label: "Forge", value: installed ? "11.15.1.2318" : snapshotPending ? "CHECKING" : "MISSING", tone: installed ? "success" : "warning" },
-    { label: "OptiFine", value: optifineReady ? "HD U M5" : snapshotPending ? "CHECKING" : "MISSING", tone: optifineReady ? "success" : "warning" },
-    { label: "Java", value: installed ? "8" : snapshotPending ? "CHECKING" : "MISSING", tone: installed ? "success" : "warning" },
-    { label: "Memory", value: `${props.settings.maxMemoryMib} MB` },
-    { label: "Opus Build", value: gameLaunchReady ? buildLabel : "UNVERIFIED", tone: gameLaunchReady ? "success" : "warning" },
-  ];
-
-  const profileRows: readonly KeyValueRow[] = [
-    { label: "Account", value: accountLabel, tone: profileReady ? "success" : "warning" },
-    { label: "Badge", value: selectedAccount ? `[${selectedAccount.badge.toUpperCase()}]` : "NONE", tone: selectedAccount ? "warning" : "muted" },
-    { label: "Auth", value: selectedAccount?.kind === "microsoft" ? "MICROSOFT" : selectedAccount ? "OFFLINE" : "NONE" },
-    { label: "Status", value: profileReady ? "READY" : "REQUIRED", tone: profileReady ? "success" : "warning" },
-    { label: "Instance", value: selectedAccountRunning ? "RUNNING" : "IDLE", tone: selectedAccountRunning ? "warning" : "muted" },
-  ];
-
-  const sessionRows: readonly KeyValueRow[] = [
-    { label: "Mode", value: developerTestProfileActive ? "DEVELOPER" : "STANDARD", tone: developerTestProfileActive ? "warning" : "normal" },
-    { label: "Instances", value: String(activeLaunchCount), tone: activeLaunchCount > 0 ? "warning" : "muted" },
-    { label: "Augmentation", value: enabledUtilityCount > 0 ? "ON" : "OFF", tone: enabledUtilityCount > 0 ? "success" : "muted" },
-    { label: "Isolation", value: "PER IDENTITY", tone: "success" },
-    { label: "Launch", value: runtimeState, tone: readyToLaunch || activeLaunchCount > 0 ? "success" : "warning" },
-  ];
-
-  const logLines = useMemo(() => buildLogLines(props, runtimeState), [props, runtimeState]);
-  const normalizedPage = props.page === "utilities" ? "modules" : props.page;
+  const logLines = useMemo(
+    () => buildLogLines(props, runtimeState, opusClientVerified, enabledUtilityCount),
+    [enabledUtilityCount, opusClientVerified, props, runtimeState],
+  );
+  const handleCopyLogs = useCallback(async () => {
+    try { await navigator.clipboard.writeText(logLines.join("\n")); setCopyLogStatus("copied"); }
+    catch { setCopyLogStatus("failed"); }
+    window.setTimeout(() => setCopyLogStatus("idle"), 2500);
+  }, [logLines]);
+  const dynamicStyles = {
+    "--media-softness": `${Math.max(0, Math.min(1.25, (appearance.glassBlur - 4) * 0.0625))}px`,
+    "--media-opacity": String(Math.max(0.58, Math.min(0.95, appearance.glassOpacity / 100))),
+  } as CSSProperties;
 
   return (
-    <main className="tui-app">
-      <header className="tui-header">
-        <div className="tui-header-brand">
-          {normalizedPage !== "home" ? (
-            <button type="button" className="tui-header-back" onClick={props.onBack} aria-label="Back to menu">
-              <span aria-hidden="true">&lt;</span>
-              BACK
+    <div className="liquid-launcher" data-theme={appearance.theme} style={dynamicStyles}>
+      <header className="liquid-header">
+        <div className="liquid-header__inner">
+          <button type="button" className="launcher-brand" onClick={() => props.onNavigate("home")} aria-label="Open Home">
+            <img src="/brand/opus-mark-user.png" alt="" draggable={false} />
+            <span><strong>Opus</strong><small>Launcher</small></span>
+          </button>
+          <nav className="liquid-nav" aria-label="Launcher navigation">
+            {navigation.map((item) => (
+              <button key={item.id} type="button" className={`liquid-nav__tab ${props.page === item.id ? "is-active" : ""}`}
+                aria-label={item.label} aria-current={props.page === item.id ? "page" : undefined} onClick={() => props.onNavigate(item.id)}>
+                <span>{item.label}</span>
+                {item.id === "account" && accounts.length > 0 ? <b aria-hidden="true">{accounts.length}</b> : null}
+                {item.id === "modules" && enabledUtilityCount > 0 ? <b aria-hidden="true">{enabledUtilityCount}</b> : null}
+              </button>
+            ))}
+          </nav>
+          <div className="liquid-header__meta">
+            <StatusBadge tone={runtimeTone}>{runtimeState}</StatusBadge>
+            <button type="button" className="account-pill" onClick={() => props.onNavigate("account")} aria-label="Open account">
+              <AccountHeadAvatar skinDataUrl={selectedAccountSkin?.dataUrl} username={selectedAccount?.username} size={24} />
+              <span className="account-username">{selectedAccount?.username ?? "No account"}</span>
             </button>
-          ) : null}
-          <img className="tui-brand-mark" src="/brand/opus-mark-64.png" alt="" />
-          <span className="tui-header-title">OPUS LAUNCHER</span>
-          <span className="tui-header-state"><StatusText value={runtimeState} tone={readyToLaunch || activeLaunchCount > 0 ? "success" : "warning"} /></span>
-        </div>
-        <div className="tui-header-meta">
-          <button type="button" onClick={() => props.onNavigate("account")}>{accountLabel}</button>
-          <span aria-hidden="true">|</span>
-          <span>{editionLabel}</span>
-          <span aria-hidden="true">|</span>
-          <span>{buildLabel}</span>
+            <button type="button" className="icon-button" onClick={props.onRefresh} aria-label="Refresh launcher state"><RefreshIcon /></button>
+          </div>
         </div>
       </header>
 
-      <div className="tui-toast-stack" aria-live="polite">
-        {props.error ? (
-          <section className="tui-message tui-message--error" role="alert">
-            <strong>ERROR</strong>
-            <span>{friendlyError(props.error)}</span>
-            <button type="button" onClick={props.onClearError}>DISMISS</button>
-          </section>
-        ) : null}
-        {props.notice ? (
-          <section className="tui-message tui-message--notice" role="status">
-            <strong>EVENT</strong>
-            <span>{props.notice}</span>
-            <button type="button" onClick={props.onClearNotice}>DISMISS</button>
-          </section>
-        ) : null}
+      <main className="liquid-body" aria-busy={snapshotPending || props.busy !== null}>
+        <StateMessages snapshotPending={snapshotPending} snapshotUnavailable={snapshotUnavailable} error={props.error}
+          notice={props.notice} busy={props.busy} loginCancelling={props.loginCancelling} onRefresh={props.onRefresh}
+          onClearError={props.onClearError} onClearNotice={props.onClearNotice} onCancelMicrosoftLogin={props.onCancelMicrosoftLogin} />
+
+        <div key={props.page} className="page-viewport" data-page={props.page}>
+        {props.page === "home" ? <HomePage appearance={appearance} videoRef={videoRef} runtimeState={runtimeState}
+          runtimeTone={runtimeTone} snapshotPending={snapshotPending} snapshotUnavailable={snapshotUnavailable} snapshot={props.snapshot}
+          settings={props.settings} selectedAccount={selectedAccount} selectedAccountSkin={selectedAccountSkin} accounts={accounts}
+          activeLaunchCount={activeLaunchCount} instances={props.instances} opusClientVerified={opusClientVerified} profileReady={profileReady}
+          primaryLabel={primaryLabel} primaryDisabled={props.busy !== null || selectedAccountRunning || snapshotPending || snapshotUnavailable}
+          busy={props.busy} onPrimaryAction={handlePrimaryAction} onNavigate={props.onNavigate} onSelectAccount={props.onSelectAccount}
+          onKillInstance={props.onKillInstance} onSettingsChange={props.onSettingsChange} /> : null}
+
+        {props.page === "installation" ? <InstallationPage snapshot={props.snapshot} minecraftReady={minecraftReady}
+          optifineReady={optifineReady} gameLaunchReady={gameLaunchReady} busy={props.busy} installProgress={props.installProgress}
+          optifineSourcePath={props.optifineSourcePath} onBack={props.onBack} onRefresh={props.onRefresh} onInstall={props.onInstall}
+          onImportOptiFine={props.onImportOptiFine} onOptiFineSourcePathChange={props.onOptiFineSourcePathChange} /> : null}
+
+        {props.page === "account" ? <AccountPage accounts={accounts} selectedAccount={selectedAccount} activeAccountIds={activeAccountIds}
+          skin={props.skin} skinCache={props.skinCache} skinLoading={props.skinLoading} snapshotUnavailable={snapshotUnavailable}
+          offlineUsername={props.offlineUsername} busy={props.busy} loginCancelling={props.loginCancelling} developerProfile={developerProfile}
+          onBack={props.onBack} onOfflineUsernameChange={props.onOfflineUsernameChange} onSaveOfflineProfile={props.onSaveOfflineProfile}
+          onStartMicrosoftLogin={props.onStartMicrosoftLogin} onCancelMicrosoftLogin={props.onCancelMicrosoftLogin}
+          onSelectAccount={props.onSelectAccount} onRemoveAccount={props.onRemoveAccount} onRunDeveloperSimulation={props.onRunDeveloperSimulation} /> : null}
+
+        {props.page === "modules" ? <ModulesPage utilities={props.utilities} preferences={props.utilityPreferences}
+          saveStatus={props.utilitySaveStatus} enabledCount={enabledUtilityCount} onBack={props.onBack}
+          onChange={props.onUtilityPreferenceChange} onOpenUtilities={(id) => { setSelectedUtilityId(id); props.onNavigate("utilities"); }} /> : null}
+
+        {props.page === "utilities" ? <UtilitiesPage utilities={props.utilities} preferences={props.utilityPreferences}
+          saveStatus={props.utilitySaveStatus} selected={selectedUtility} preference={selectedUtilityPreference} onBack={props.onBack}
+          onSelect={setSelectedUtilityId} onChange={props.onUtilityPreferenceChange} /> : null}
+
+        {props.page === "settings" ? <SettingsPage settings={props.settings} snapshot={props.snapshot} appearance={appearance}
+          busy={props.busy} developerProfile={developerProfile} onBack={props.onBack} onAppearanceChange={setAppearance}
+          onSettingsChange={props.onSettingsChange} onSaveSettings={props.onSaveSettings}
+          onRunDeveloperSimulation={props.onRunDeveloperSimulation} onQuit={props.onQuit} /> : null}
+
+        {props.page === "logs" ? <LogsPage category={logCategory} lines={logLines}
+          dataDirectory={props.snapshot?.dataDirectory ?? "Unavailable"} copyStatus={copyLogStatus} onBack={props.onBack}
+          onCategoryChange={setLogCategory} onCopy={handleCopyLogs} onRefresh={props.onRefresh} /> : null}
+        </div>
+      </main>
+    </div>
+  );
+}
+
+function StateMessages(props: {
+  snapshotPending: boolean; snapshotUnavailable: boolean; error: string | null; notice: string | null;
+  busy: string | null; loginCancelling: boolean; onRefresh: () => void; onClearError: () => void;
+  onClearNotice: () => void; onCancelMicrosoftLogin: () => void;
+}) {
+  return <div className="state-stack" aria-live="polite">
+    {props.snapshotPending ? <div className="state-banner" role="status"><span className="state-banner__marker" aria-hidden="true" />
+      <div><strong>Checking launcher readiness</strong><span>Reading installation, account, and runtime state.</span></div></div> : null}
+    {props.snapshotUnavailable ? <div className="state-banner is-danger" role="alert"><span className="state-banner__marker" aria-hidden="true" />
+      <div><strong>Launcher state unavailable</strong><span>{friendlyError(props.error ?? "The local service did not respond.")}</span></div>
+      <button type="button" className="button-secondary button-compact" onClick={props.onRefresh}>Try again</button>
+      <button type="button" className="button-quiet button-compact" onClick={props.onClearError}>Dismiss</button></div> : null}
+    {props.error && !props.snapshotUnavailable ? <div className="state-banner is-danger" role="alert"><span className="state-banner__marker" aria-hidden="true" />
+      <div><strong>Action failed</strong><span>{friendlyError(props.error)}</span></div>
+      <button type="button" className="button-quiet button-compact" onClick={props.onClearError}>Dismiss</button></div> : null}
+    {props.notice ? <div className="state-banner is-success" role="status"><span className="state-banner__marker" aria-hidden="true" />
+      <div><strong>Launcher updated</strong><span>{props.notice}</span></div>
+      <button type="button" className="button-quiet button-compact" onClick={props.onClearNotice}>Dismiss</button></div> : null}
+    {props.busy ? <div className="state-banner is-busy" role="status"><span className="state-banner__marker" aria-hidden="true" />
+      <div><strong>{sentenceCase(props.busy)}</strong><span>The current operation must finish before another starts.</span></div>
+      {props.busy === "logging in" ? <button type="button" className="button-danger button-compact" disabled={props.loginCancelling} onClick={props.onCancelMicrosoftLogin}>
+        {props.loginCancelling ? "Cancelling…" : "Cancel sign-in"}</button> : null}</div> : null}
+  </div>;
+}
+
+function HomePage(props: {
+  appearance: LauncherAppearance; videoRef: RefObject<HTMLVideoElement | null>; runtimeState: string; runtimeTone: StatusTone;
+  snapshotPending: boolean; snapshotUnavailable: boolean; snapshot: TuiSnapshot | null; settings: TuiSettings;
+  selectedAccount: TuiAccount | null; selectedAccountSkin: TuiAccountSkin | null; accounts: readonly TuiAccount[];
+  activeLaunchCount: number; instances: readonly TuiInstance[]; opusClientVerified: boolean; profileReady: boolean;
+  primaryLabel: string; primaryDisabled: boolean; busy: string | null; onPrimaryAction: () => void;
+  onNavigate: (page: TuiPage) => void; onSelectAccount: (accountId: string) => void; onKillInstance: (sessionId: string) => void;
+  onSettingsChange?: (settings: TuiSettings) => void;
+}) {
+  const isForge = props.settings.launchProfileType === "forge";
+  return <section className="launcher-page home-page" aria-labelledby="home-title">
+    <PageHeader id="home-title" eyebrow="Opus Client" title="Ready to play"
+      aside={<StatusBadge tone={props.runtimeTone}>{props.runtimeState}</StatusBadge>} />
+    <div className="home-play-card surface-panel">
+      <div className={`home-media is-${props.appearance.backdrop}`}>
+        {props.appearance.backdrop === "video" ? <video ref={props.videoRef} loop muted playsInline preload="metadata"
+          poster="/media/opus-night-sky-poster-v1.jpg" aria-hidden="true"><source src="/media/opus-night-sky-v1.mp4" type="video/mp4" /></video> : null}
+        <div className="home-media__identity"><img src="/brand/opus-mark-user.png" alt="" draggable={false} />
+          <span><strong>Opus</strong><small>Competitive intelligence client</small></span></div>
       </div>
-
-      <section className="tui-screen-region" aria-busy={snapshotPending}>
-        {normalizedPage === "home" ? (
-          <div className="tui-home-grid">
-            <Pane
-              ref={(node) => { paneRefs.current[0] = node; }}
-              title="MENU"
-              className="tui-play-pane"
-              focused={focusedPane === 0}
-              onFocus={() => setFocusedPane(0)}
-              onClick={() => focusPane(0)}
+      <div className="home-play-panel">
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div className="section-kicker">Launch profile</div>
+          <div className="preset-row" style={{ margin: 0, gap: "4px" }}>
+            <button
+              type="button"
+              className={!isForge ? "is-active" : ""}
+              disabled={props.busy !== null}
+              style={{ padding: "3px 8px", fontSize: "0.75rem", borderRadius: "4px" }}
+              title="Standard: Clean standalone loader (Lunar style)"
+              onClick={() => props.onSettingsChange?.({ ...props.settings, launchProfileType: "standalone" })}
             >
-              <MenuList items={playItems} selectedIndex={playIndex} onSelect={setPlayIndex} onActivate={activatePlayItem} />
-            </Pane>
-
-            <Pane
-              ref={(node) => { paneRefs.current[1] = node; }}
-              title="SYSTEM"
-              focused={focusedPane === 1}
-              onFocus={() => setFocusedPane(1)}
-              onClick={() => focusPane(1)}
+              Standard
+            </button>
+            <button
+              type="button"
+              className={isForge ? "is-active" : ""}
+              disabled={props.busy !== null}
+              style={{ padding: "3px 8px", fontSize: "0.75rem", borderRadius: "4px" }}
+              title="Forge: Supports Forge coremods and custom mods"
+              onClick={() => props.onSettingsChange?.({ ...props.settings, launchProfileType: "forge" })}
             >
-              <KeyValueList rows={systemRows} />
-            </Pane>
-
-            <Pane
-              ref={(node) => { paneRefs.current[2] = node; }}
-              title="PROFILE"
-              focused={focusedPane === 2}
-              onFocus={() => setFocusedPane(2)}
-              onClick={() => focusPane(2)}
-            >
-              <KeyValueList rows={profileRows} />
-            </Pane>
-
-            <Pane
-              ref={(node) => { paneRefs.current[3] = node; }}
-              title="SESSION"
-              focused={focusedPane === 3}
-              onFocus={() => setFocusedPane(3)}
-              onClick={() => focusPane(3)}
-            >
-              <KeyValueList rows={sessionRows} />
-              <InstanceManager instances={props.instances} busy={props.busy} onKill={props.onKillInstance} />
-            </Pane>
+              Forge
+            </button>
           </div>
-        ) : null}
-
-        {normalizedPage === "installation" ? (
-          <InstallationScreen
-            index={installationIndex}
-            setIndex={setInstallationIndex}
-            snapshot={props.snapshot}
-            installed={installed}
-            optifineReady={optifineReady}
-            busy={props.busy}
-            onInstall={props.onInstall}
-            onRefresh={props.onRefresh}
-            onOpenSettings={() => {
-              props.onNavigate("settings");
-              setSettingsIndex(2);
-            }}
-          />
-        ) : null}
-
-        {normalizedPage === "account" ? (
-          <AccountScreen
-            snapshotPending={snapshotPending}
-            snapshotUnavailable={snapshotUnavailable}
-            accounts={accounts}
-            selectedAccountId={selectedAccount?.id ?? null}
-            activeAccountIds={activeAccountIds}
-            skin={props.skin}
-            skinLoading={props.skinLoading}
-            offlineUsername={props.offlineUsername}
-            busy={props.busy}
-            loginCancelling={props.loginCancelling}
-            developerTestProfileActive={developerTestProfileActive}
-            developerSimulationActive={developerSimulationActive}
-            onOfflineUsernameChange={props.onOfflineUsernameChange}
-            onSaveOfflineProfile={props.onSaveOfflineProfile}
-            onStartMicrosoftLogin={props.onStartMicrosoftLogin}
-            onCancelMicrosoftLogin={props.onCancelMicrosoftLogin}
-            onSelectAccount={props.onSelectAccount}
-            onRemoveAccount={props.onRemoveAccount}
-            onRunDeveloperSimulation={props.onRunDeveloperSimulation}
-            onRefresh={props.onRefresh}
-          />
-        ) : null}
-
-        {normalizedPage === "modules" ? (
-          <ModulesScreen
-            utilities={props.utilities}
-            preferences={props.utilityPreferences}
-            saveStatus={props.utilitySaveStatus}
-            selectedId={selectedUtility?.id ?? "fps"}
-            onSelect={setSelectedUtilityId}
-            onChange={props.onUtilityPreferenceChange}
-          />
-        ) : null}
-
-        {normalizedPage === "settings" ? (
-          <SettingsScreen
-            index={settingsIndex}
-            setIndex={setSettingsIndex}
-            settings={props.settings}
-            snapshot={props.snapshot}
-            optifineReady={optifineReady}
-            optifineSourcePath={props.optifineSourcePath}
-            busy={props.busy}
-            onSettingsChange={props.onSettingsChange}
-            onOptiFineSourcePathChange={props.onOptiFineSourcePathChange}
-            onImportOptiFine={props.onImportOptiFine}
-            onSave={props.onSaveSettings}
-          />
-        ) : null}
-
-        {normalizedPage === "logs" ? (
-          <LogsScreen
-            category={logCategory}
-            onCategoryChange={setLogCategory}
-            lines={logLines}
-            dataDirectory={props.snapshot?.dataDirectory ?? "Unavailable"}
-            onRefresh={props.onRefresh}
-          />
-        ) : null}
+        </div>
+        <h2>{isForge ? "Opus 1.8.9 (Forge)" : "Opus 1.8.9 (Standard)"}</h2>
+        <p className="home-profile-status" title={props.snapshot?.gameLaunchStatus}>
+          {props.opusClientVerified
+            ? (isForge ? "Verified Opus + Forge profile. Ready for launch." : "Verified Opus Standard profile. Ready for launch.")
+            : props.snapshot?.gameLaunchStatus ?? "Waiting for launcher state."}</p>
+        <dl className="launch-facts">
+          <div><dt>Profile</dt><dd>{isForge ? "Forge" : "Standard"}</dd></div>
+          <div><dt>Account</dt><dd className="account-username">{props.selectedAccount?.username ?? "Not selected"}</dd></div>
+          <div><dt>Memory</dt><dd>{props.settings.maxMemoryMib} MB</dd></div><div><dt>Instances</dt><dd>{props.activeLaunchCount}</dd></div></dl>
+        <div className="launch-account-row"><AccountHeadAvatar skinDataUrl={props.selectedAccountSkin?.dataUrl} username={props.selectedAccount?.username} size={36} />
+          {props.accounts.length > 1 ? <label className="inline-select"><span>Active account</span>
+            <select className="account-username" value={props.selectedAccount?.id ?? ""} onChange={(event) => props.onSelectAccount(event.target.value)}>
+              {props.accounts.map((account) => <option className="account-username" key={account.id} value={account.id}>{account.username}</option>)}</select></label>
+            : <button type="button" className="account-summary" onClick={() => props.onNavigate("account")}>
+              <strong className="account-username">{props.selectedAccount?.username ?? "Choose an account"}</strong>
+              <span>{props.selectedAccount?.kind === "microsoft" ? "Microsoft account" : props.selectedAccount ? "Offline profile" : "Required to launch"}</span></button>}
+        </div>
+        <button type="button" className="launcher-primary" disabled={props.primaryDisabled} onClick={props.onPrimaryAction}>{props.primaryLabel}</button>
+      </div>
+    </div>
+    <div className="home-status-grid">
+      <section className="surface-panel home-readiness" aria-labelledby="home-readiness-title">
+        <header className="home-status-heading"><h2 id="home-readiness-title">Readiness</h2></header>
+        <div className="home-readiness-items">
+        <OperationalRow label="Installation" value={props.snapshotPending ? "Checking" : props.opusClientVerified ? "Ready" : "Action required"}
+          tone={props.opusClientVerified ? "success" : props.snapshotUnavailable ? "danger" : "warning"} onClick={() => props.onNavigate("installation")} />
+        <OperationalRow label="Account" value={props.profileReady ? "Ready" : "Required"} tone={props.profileReady ? "success" : "warning"} onClick={() => props.onNavigate("account")} />
+        <OperationalRow label="Java" value={props.snapshot?.javaStatus ?? "Unavailable"} tone={props.snapshot?.minecraftReady ? "success" : "muted"} />
+        </div>
       </section>
-
-      <LaunchDock
-        account={selectedAccount}
-        accountRunning={selectedAccountRunning}
-        activeLaunchCount={activeLaunchCount}
-        ready={readyToLaunch}
-        busy={props.busy}
-        developerTestProfileActive={developerTestProfileActive}
-        developerSimulationActive={developerSimulationActive}
-        onLaunch={activateLaunch}
-        onOpenAccounts={() => props.onNavigate("account")}
-        onOpenSetup={() => props.onNavigate(profileReady ? "installation" : "account")}
-      />
-
-      <CommandBar commands={normalizedPage === "home"
-        ? ["ARROW navigate", "SHIFT+ARROW pane", "ENTER select", "L launch", "1-6 quick", "Q quit"]
-        : ["ARROW navigate", "SHIFT+ARROW pane", "ESC back", "L launch", "1-6 quick", "Q quit"]}
-      />
-
-      {props.busy ? (
-        <TaskOverlay
-          busy={props.busy}
-          progress={props.installProgress}
-          account={selectedAccount}
-          loginCancelling={props.loginCancelling}
-          onCancelLogin={props.onCancelMicrosoftLogin}
-        />
-      ) : null}
-    </main>
-  );
+      <section className="surface-panel home-sessions" aria-labelledby="home-sessions-title">
+        <header className="home-status-heading"><h2 id="home-sessions-title">Active sessions</h2>
+          <StatusBadge tone={props.instances.length ? "success" : "muted"}>{props.instances.length} running</StatusBadge></header>
+        {props.instances.length === 0 ? <p className="home-session-empty">No running instances</p>
+          : <div className="session-list" tabIndex={0} role="region" aria-label="Running instances">{props.instances.map((instance) => <div className="session-row" key={instance.sessionId}>
+            <div><strong className="account-username">{instance.username}</strong><span>{instance.title || instance.sessionId}</span></div><StatusBadge tone="success">Running</StatusBadge>
+            <button type="button" className="button-danger button-compact" disabled={props.busy !== null} onClick={() => props.onKillInstance(instance.sessionId)}>Stop</button>
+          </div>)}</div>}
+      </section>
+    </div>
+  </section>;
 }
 
-function InstallationScreen(props: {
-  index: number;
-  setIndex: (index: number) => void;
-  snapshot: TuiSnapshot | null;
-  installed: boolean;
-  optifineReady: boolean;
-  busy: string | null;
-  onInstall: () => void;
-  onRefresh: () => void;
-  onOpenSettings: () => void;
+function InstallationPage(props: {
+  snapshot: TuiSnapshot | null; minecraftReady: boolean; optifineReady: boolean; gameLaunchReady: boolean;
+  busy: string | null; installProgress: TuiInstallProgress | null; optifineSourcePath: string;
+  onBack: () => void; onRefresh: () => void; onInstall: () => void; onImportOptiFine: () => void;
+  onOptiFineSourcePathChange: (value: string) => void;
 }) {
-  const items: readonly MenuItem[] = [
-    { id: "verify", shortcut: "V", label: "Verify installation" },
-    { id: "repair", shortcut: "R", label: "Repair installation" },
-    { id: "optifine", shortcut: "O", label: "Import OptiFine" },
-    { id: "refresh", shortcut: "F", label: "Refresh state" },
-  ];
-  const activate = (index: number) => {
-    if (props.busy !== null) return;
-    if (index === 0 || index === 1) props.onInstall();
-    if (index === 2) props.onOpenSettings();
-    if (index === 3) props.onRefresh();
-  };
-  const rows: readonly KeyValueRow[] = [
-    { label: "Minecraft", value: props.installed ? "READY / 1.8.9" : "MISSING", tone: props.installed ? "success" : "warning" },
-    { label: "Forge", value: props.installed ? "READY / 11.15.1.2318" : "MISSING", tone: props.installed ? "success" : "warning" },
-    { label: "OptiFine", value: props.optifineReady ? "READY / HD U M5" : "MISSING", tone: props.optifineReady ? "success" : "warning" },
-    { label: "Minecraft host", value: props.snapshot?.gameLaunchReady ? "READY" : "MISSING", tone: props.snapshot?.gameLaunchReady ? "success" : "warning" },
-    { label: "Java", value: props.installed ? "READY / 8" : "MISSING", tone: props.installed ? "success" : "warning" },
-  ];
-  return (
-    <div className="tui-page-grid">
-      <Pane title="INSTALLATION">
-        <MenuList items={items} selectedIndex={props.index} onSelect={props.setIndex} onActivate={activate} />
-      </Pane>
-      <Pane title="COMPONENTS">
-        <KeyValueList rows={rows} />
-        <div className="tui-detail-copy">
-          <p>{props.snapshot?.gameLaunchStatus ?? "Game launcher status unavailable."}</p>
-          <p>{props.snapshot?.minecraftStatus ?? "The local installation has not been checked."}</p>
-          <p>{props.snapshot?.optifineStatus ?? "OptiFine status unavailable."}</p>
-          <p>{props.snapshot?.javaStatus ?? "Java runtime status unavailable."}</p>
-        </div>
-      </Pane>
+  const percent = props.installProgress ? Math.round((props.installProgress.completedFiles / Math.max(1, props.installProgress.totalFiles)) * 100) : 0;
+  const packageReady = props.minecraftReady && props.optifineReady && props.gameLaunchReady;
+  return <section className="launcher-page" aria-labelledby="installation-title">
+    <PageHeader id="installation-title" eyebrow="Local distribution" title="Installation"
+      description="Verify each required component without changing the normal .minecraft directory." onBack={props.onBack}
+      aside={<StatusBadge tone={packageReady ? "success" : "warning"}>{packageReady ? "Ready" : "Action required"}</StatusBadge>} />
+    <Surface title="Opus Client bundle" detail="Unified local release contract"><div className="operational-list">
+      <OperationalRow label="Minecraft" value={props.snapshot?.minecraftStatus ?? "Not checked"} tone={props.minecraftReady ? "success" : "warning"} />
+      <OperationalRow label="OptiFine" value={props.snapshot?.optifineStatus ?? "Not checked"} tone={props.optifineReady ? "success" : "warning"} />
+      <OperationalRow label="Java runtime" value={props.snapshot?.javaStatus ?? "Not checked"} tone={props.minecraftReady ? "success" : "warning"} />
+      <OperationalRow label="Launch host" value={props.snapshot?.gameLaunchStatus ?? "Not checked"} tone={props.gameLaunchReady ? "success" : "warning"} />
     </div>
-  );
+      {props.installProgress ? <div className="progress-block"><div><span>{props.installProgress.phase}</span><strong>{props.installProgress.completedFiles} / {props.installProgress.totalFiles}</strong></div>
+        <div className="progress-track" role="progressbar" aria-label="Installation progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent}><span style={{ width: `${percent}%` }} /></div>
+        <small>{props.installProgress.downloadedFiles} downloaded · {props.installProgress.cachedFiles} reused</small></div> : null}
+      <div className="panel-actions"><button type="button" className="launcher-primary" onClick={props.onInstall} disabled={props.busy !== null}>
+        {props.busy === "installing" ? "Verifying…" : packageReady ? "Verify installation" : "Install and verify"}</button>
+        <button type="button" className="button-secondary" onClick={props.onRefresh} disabled={props.busy !== null}>Refresh state</button></div>
+    </Surface>
+    {!props.optifineReady ? <Surface title="OptiFine source" detail="Use your verified local 1.8.9 HD U M5 JAR">
+      <div className="form-row form-row--action"><label htmlFor="optifine-source-path">Local JAR path</label>
+        <input id="optifine-source-path" type="text" value={props.optifineSourcePath} placeholder="/path/to/OptiFine_1.8.9_HD_U_M5.jar"
+          disabled={props.busy !== null} onChange={(event) => props.onOptiFineSourcePathChange(event.target.value)} />
+        <button type="button" className="button-secondary" onClick={props.onImportOptiFine} disabled={!props.optifineSourcePath.trim() || props.busy !== null}>
+          {props.busy === "importing" ? "Verifying…" : "Import OptiFine"}</button></div></Surface> : null}
+  </section>;
 }
 
-const SKIN_PX = 7;
-
-type FaceRects = {
-  front: [number, number, number, number];
-  back: [number, number, number, number];
-  right: [number, number, number, number];
-  left: [number, number, number, number];
-  top: [number, number, number, number];
-  bottom: [number, number, number, number];
-};
-
-/// One cuboid body part: width/height/depth in skin pixels, its offset from the
-/// model centre in skin pixels, and the UV rectangles for its six faces.
-type BodyPart = {
-  key: string;
-  w: number;
-  h: number;
-  d: number;
-  x: number;
-  y: number;
-  base: FaceRects;
-  overlay?: FaceRects;
-};
-
-/// Classic Minecraft 1.8 64x64 UV layout. `armW` is 4 for the classic model and
-/// 3 for the slim model; the left arm/leg use the dedicated 64x64 regions.
-function bodyParts(slim: boolean): BodyPart[] {
-  const a = slim ? 3 : 4;
-  return [
-    {
-      key: "head",
-      w: 8,
-      h: 8,
-      d: 8,
-      x: 0,
-      y: -12,
-      base: {
-        front: [8, 8, 8, 8],
-        back: [24, 8, 8, 8],
-        right: [0, 8, 8, 8],
-        left: [16, 8, 8, 8],
-        top: [8, 0, 8, 8],
-        bottom: [16, 0, 8, 8],
-      },
-      overlay: {
-        front: [40, 8, 8, 8],
-        back: [56, 8, 8, 8],
-        right: [32, 8, 8, 8],
-        left: [48, 8, 8, 8],
-        top: [40, 0, 8, 8],
-        bottom: [48, 0, 8, 8],
-      },
-    },
-    {
-      key: "body",
-      w: 8,
-      h: 12,
-      d: 4,
-      x: 0,
-      y: -2,
-      base: {
-        front: [20, 20, 8, 12],
-        back: [32, 20, 8, 12],
-        right: [16, 20, 4, 12],
-        left: [28, 20, 4, 12],
-        top: [20, 16, 8, 4],
-        bottom: [28, 16, 8, 4],
-      },
-    },
-    {
-      key: "arm-right",
-      w: a,
-      h: 12,
-      d: 4,
-      x: -(4 + a / 2),
-      y: -2,
-      base: {
-        right: [40, 20, 4, 12],
-        front: [44, 20, a, 12],
-        left: [44 + a, 20, 4, 12],
-        back: [44 + a + 4, 20, a, 12],
-        top: [44, 16, a, 4],
-        bottom: [44 + a, 16, a, 4],
-      },
-    },
-    {
-      key: "arm-left",
-      w: a,
-      h: 12,
-      d: 4,
-      x: 4 + a / 2,
-      y: -2,
-      base: {
-        right: [32, 52, 4, 12],
-        front: [36, 52, a, 12],
-        left: [36 + a, 52, 4, 12],
-        back: [40 + a, 52, a, 12],
-        top: [36, 48, a, 4],
-        bottom: [36 + a, 48, a, 4],
-      },
-    },
-    {
-      key: "leg-right",
-      w: 4,
-      h: 12,
-      d: 4,
-      x: -2,
-      y: 10,
-      base: {
-        right: [0, 20, 4, 12],
-        front: [4, 20, 4, 12],
-        left: [8, 20, 4, 12],
-        back: [12, 20, 4, 12],
-        top: [4, 16, 4, 4],
-        bottom: [8, 16, 4, 4],
-      },
-    },
-    {
-      key: "leg-left",
-      w: 4,
-      h: 12,
-      d: 4,
-      x: 2,
-      y: 10,
-      base: {
-        right: [16, 52, 4, 12],
-        front: [20, 52, 4, 12],
-        left: [24, 52, 4, 12],
-        back: [28, 52, 4, 12],
-        top: [20, 48, 4, 4],
-        bottom: [24, 48, 4, 4],
-      },
-    },
-  ];
-}
-
-/// Background style that samples one UV rectangle from the 64x64 skin sheet.
-function faceTexture(url: string, rect: [number, number, number, number]): CSSProperties {
-  const [x, y, w, h] = rect;
-  return {
-    backgroundImage: `url("${url}")`,
-    backgroundRepeat: "no-repeat",
-    backgroundSize: `${64 * SKIN_PX}px ${64 * SKIN_PX}px`,
-    backgroundPosition: `-${x * SKIN_PX}px -${y * SKIN_PX}px`,
-    width: `${w * SKIN_PX}px`,
-    height: `${h * SKIN_PX}px`,
-    imageRendering: "pixelated",
-  };
-}
-
-/// Place a single cube face: centre it on the part origin, orient it, then push
-/// it out by half of the perpendicular dimension so six faces form a solid box.
-function faceTransform(face: keyof FaceRects, w: number, h: number, d: number): string {
-  const halfW = (w * SKIN_PX) / 2;
-  const halfH = (h * SKIN_PX) / 2;
-  const halfD = (d * SKIN_PX) / 2;
-  switch (face) {
-    case "front":
-      return `translate(-50%, -50%) translateZ(${halfD}px)`;
-    case "back":
-      return `translate(-50%, -50%) rotateY(180deg) translateZ(${halfD}px)`;
-    case "right":
-      return `translate(-50%, -50%) rotateY(-90deg) translateZ(${halfW}px)`;
-    case "left":
-      return `translate(-50%, -50%) rotateY(90deg) translateZ(${halfW}px)`;
-    case "top":
-      return `translate(-50%, -50%) rotateX(90deg) translateZ(${halfH}px)`;
-    case "bottom":
-      return `translate(-50%, -50%) rotateX(-90deg) translateZ(${halfH}px)`;
-  }
-}
-
-function SkinBox(props: { url: string; part: BodyPart }) {
-  const { part } = props;
-  const faces: (keyof FaceRects)[] = ["front", "back", "right", "left", "top", "bottom"];
-  const partTransform = `translate(-50%, -50%) translate3d(${part.x * SKIN_PX}px, ${part.y * SKIN_PX}px, 0)`;
-  return (
-    <div className="tui-skin-part" style={{ transform: partTransform }}>
-      {faces.map((face) => (
-        <span
-          key={`base-${face}`}
-          className="tui-skin-face"
-          style={{ ...faceTexture(props.url, part.base[face]), transform: faceTransform(face, part.w, part.h, part.d) }}
-        />
-      ))}
-      {part.overlay
-        ? faces.map((face) => (
-            <span
-              key={`overlay-${face}`}
-              className="tui-skin-face tui-skin-face-overlay"
-              style={{ ...faceTexture(props.url, part.overlay![face]), transform: faceTransform(face, part.w + 0.5, part.h + 0.5, part.d + 0.5) }}
-            />
-          ))
-        : null}
-    </div>
-  );
-}
-
-function SkinViewer(props: { skin: TuiAccountSkin | null; loading: boolean; username: string }) {
-  const [rotX, setRotX] = useState(-12);
-  const [rotY, setRotY] = useState(-24);
-  const [spinning, setSpinning] = useState(true);
-  const dragRef = useRef<{ pointerId: number; x: number; y: number; rotX: number; rotY: number } | null>(null);
-
-  useEffect(() => {
-    if (!spinning) return;
-    let frame = 0;
-    let previous = performance.now();
-    const step = (now: number) => {
-      const delta = now - previous;
-      previous = now;
-      setRotY((current) => current + delta * 0.03);
-      frame = window.requestAnimationFrame(step);
-    };
-    frame = window.requestAnimationFrame(step);
-    return () => window.cancelAnimationFrame(frame);
-  }, [spinning]);
-
-  const skinUrl = props.skin?.dataUrl ?? null;
-  const slim = props.skin?.model === "slim";
-  const parts = useMemo(() => bodyParts(slim), [slim]);
-  const normalizedY = ((rotY % 360) + 360) % 360;
-  const clampedX = Math.max(-90, Math.min(90, rotX));
-
-  const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
-    dragRef.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, rotX, rotY };
-    setSpinning(false);
-    event.currentTarget.setPointerCapture(event.pointerId);
-  };
-  const onPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
-    const drag = dragRef.current;
-    if (!drag || drag.pointerId !== event.pointerId) return;
-    setRotY(drag.rotY + (event.clientX - drag.x) * 0.6);
-    setRotX(Math.max(-90, Math.min(90, drag.rotX - (event.clientY - drag.y) * 0.6)));
-  };
-  const endDrag = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (dragRef.current?.pointerId === event.pointerId) dragRef.current = null;
-  };
-
-  return (
-    <div className="tui-skin-viewer">
-      <div
-        className="tui-skin-stage"
-        role="img"
-        aria-label={`3D skin preview for ${props.username}`}
-        onPointerDown={onPointerDown}
-        onPointerMove={onPointerMove}
-        onPointerUp={endDrag}
-        onPointerCancel={endDrag}
-      >
-        {skinUrl ? (
-          <div className="tui-skin-scene">
-            <div
-              className="tui-skin-root"
-              style={{ transform: `rotateX(${clampedX}deg) rotateY(${normalizedY}deg)` }}
-            >
-              {parts.map((part) => (
-                <SkinBox key={part.key} url={skinUrl} part={part} />
-              ))}
-            </div>
-          </div>
-        ) : (
-          <p className="tui-empty-state">{props.loading ? "LOADING SKIN..." : "NO SKIN"}</p>
-        )}
-      </div>
-      <div className="tui-skin-controls">
-        <button type="button" className="tui-action-button" data-tui-nav-item onClick={() => setSpinning((value) => !value)}>
-          {spinning ? "PAUSE SPIN" : "AUTO SPIN"}
-        </button>
-        <button
-          type="button"
-          className="tui-action-button"
-          data-tui-nav-item
-          onClick={() => { setRotX(-12); setRotY(-24); }}
-        >
-          RESET VIEW
-        </button>
-        <span className="tui-skin-hint">Drag to rotate{props.skin?.isDefault ? " · default skin" : ""}</span>
-      </div>
-    </div>
-  );
-}
-
-function AccountScreen(props: {
-  snapshotPending: boolean;
-  snapshotUnavailable: boolean;
-  accounts: readonly TuiAccount[];
-  selectedAccountId: string | null;
-  activeAccountIds: ReadonlySet<string>;
-  skin: TuiAccountSkin | null;
-  skinLoading: boolean;
-  offlineUsername: string;
-  busy: string | null;
-  loginCancelling: boolean;
-  developerTestProfileActive: boolean;
-  developerSimulationActive: boolean;
-  onOfflineUsernameChange: (value: string) => void;
-  onSaveOfflineProfile: () => void;
-  onStartMicrosoftLogin: () => void;
-  onCancelMicrosoftLogin: () => void;
-  onSelectAccount: (accountId: string) => void;
-  onRemoveAccount: (accountId: string) => void;
-  onRunDeveloperSimulation: () => void;
-  onRefresh: () => void;
+function AccountPage(props: {
+  accounts: readonly TuiAccount[]; selectedAccount: TuiAccount | null; activeAccountIds: ReadonlySet<string>;
+  skin: TuiAccountSkin | null; skinCache?: Record<string, TuiAccountSkin>; skinLoading: boolean; snapshotUnavailable: boolean;
+  offlineUsername: string; busy: string | null; loginCancelling: boolean; developerProfile: TuiSnapshot["developerTestProfile"] | undefined;
+  onBack: () => void; onOfflineUsernameChange: (value: string) => void; onSaveOfflineProfile: () => void;
+  onStartMicrosoftLogin: () => void; onCancelMicrosoftLogin: () => void; onSelectAccount: (id: string) => void;
+  onRemoveAccount: (id: string) => void; onRunDeveloperSimulation: () => void;
 }) {
-  const [pendingRemoveId, setPendingRemoveId] = useState<string | null>(null);
-  const [addOpen, setAddOpen] = useState(false);
-  const [addMode, setAddMode] = useState<"choose" | "unofficial">("choose");
-  const offlineUsernameValid = /^[A-Za-z0-9_]{3,16}$/.test(props.offlineUsername);
-  const selectedAccount = props.accounts.find((account) => account.id === props.selectedAccountId) ?? null;
-  const selectedRunning = selectedAccount ? props.activeAccountIds.has(selectedAccount.id) : false;
-  useEffect(() => setPendingRemoveId(null), [props.selectedAccountId]);
-
-  const closeAdd = useCallback(() => {
-    setAddOpen(false);
-    setAddMode("choose");
-  }, []);
-
-  useEffect(() => {
-    if (props.busy === "offline-profile" && props.offlineUsername === "") closeAdd();
-  }, [closeAdd, props.busy, props.offlineUsername]);
-
-  const accountRows: readonly KeyValueRow[] = [
-    { label: "Identity", value: selectedAccount?.username ?? "NONE", tone: selectedAccount?.ready ? "success" : "warning" },
-    { label: "Prefix", value: selectedAccount ? `[${selectedAccount.badge.toUpperCase()}]` : "NONE", tone: selectedAccount ? "warning" : "muted" },
-    { label: "Provider", value: selectedAccount?.kind === "microsoft" ? "MICROSOFT" : selectedAccount ? "OFFLINE" : "NONE" },
-    {
-      label: "Credential",
-      value: selectedAccount?.ready
-        ? "READY"
-        : selectedAccount?.kind === "microsoft"
-          ? "RECONNECT REQUIRED"
-          : "UNAVAILABLE",
-      tone: selectedAccount?.ready ? "success" : "warning",
-    },
-    { label: "Instance", value: selectedRunning ? "RUNNING" : "IDLE", tone: selectedRunning ? "warning" : "muted" },
-    { label: "UUID", value: selectedAccount?.uuid ? compactUuid(selectedAccount.uuid) : "MIGRATES ON LAUNCH", tone: "muted" },
-  ];
-
-  return (
-    <div className="tui-page-grid">
-      <Pane title={`IDENTITIES / ${props.accounts.length}`}>
-        <div className="tui-account-list" role="listbox" aria-label="Launch identities">
-          {props.accounts.length === 0 ? <p className="tui-empty-state">NO IDENTITIES SAVED</p> : null}
-          {props.accounts.map((account) => {
-            const selected = account.id === props.selectedAccountId;
+  return <section className="launcher-page" aria-labelledby="account-title">
+    <PageHeader id="account-title" focusable eyebrow="Identity" title="Account" description="Choose the profile used for the next launch. Stored identities stay local to Opus."
+      onBack={props.onBack} aside={<StatusBadge tone={props.selectedAccount?.ready ? "success" : "warning"}>{props.accounts.length} stored</StatusBadge>} />
+    <div className="account-grid">
+      <Surface title="Add profile" detail="Official or offline"><div className="form-stack">
+        <div className="form-copy"><strong>Microsoft account</strong><span>Sign in and verify Java Edition ownership.</span></div>
+        <div className="panel-actions"><button type="button" className="launcher-primary" disabled={props.busy !== null || props.snapshotUnavailable} onClick={props.onStartMicrosoftLogin}>
+          {props.busy === "logging in" ? "Waiting for sign-in…" : "Sign in with Microsoft"}</button>
+          {props.busy === "logging in" ? <button type="button" className="button-danger" disabled={props.loginCancelling} onClick={props.onCancelMicrosoftLogin}>
+            {props.loginCancelling ? "Cancelling…" : "Cancel"}</button> : null}</div>
+        <div className="section-divider" /><label htmlFor="offline-username">Offline profile</label>
+        <input id="offline-username" className="account-username" type="text" value={props.offlineUsername} maxLength={16}
+          autoCapitalize="none" autoCorrect="off" autoComplete="off" spellCheck={false}
+          placeholder="Minecraft username" disabled={props.busy !== null}
+          onChange={(event) => props.onOfflineUsernameChange(event.target.value)} onKeyDown={(event) => {
+            if (event.key === "Enter" && props.offlineUsername.trim() && props.busy === null) props.onSaveOfflineProfile();
+          }} />
+        <button type="button" className="button-secondary" disabled={!props.offlineUsername.trim() || props.busy !== null} onClick={props.onSaveOfflineProfile}>Add offline profile</button>
+        {props.developerProfile?.available ? <div className="developer-row"><div><strong>Developer simulation</strong><span>No game process is launched.</span></div>
+          <button type="button" className="button-secondary button-compact" disabled={props.developerProfile.simulationActive || props.busy !== null} onClick={props.onRunDeveloperSimulation}>
+            {props.developerProfile.simulationActive ? "Running" : props.developerProfile.active ? "Disable" : "Run"}</button></div> : null}
+      </div></Surface>
+      <Surface title="Registered profiles" detail={`${props.accounts.length} available`}>
+        {props.accounts.length === 0 ? <EmptyState title="No accounts yet" detail="Sign in with Microsoft or add an offline profile to continue." />
+          : <div className="account-list">{props.accounts.map((account) => {
+            const selected = props.selectedAccount?.id === account.id;
+            const accountSkin = props.skinCache?.[account.id] ?? (selected ? props.skin : null);
             const running = props.activeAccountIds.has(account.id);
-            return (
-              <button
-                key={account.id}
-                type="button"
-                className={`tui-account-row ${selected ? "is-selected" : ""}`}
-                role="option"
-                aria-selected={selected}
-                data-tui-nav-item
-                disabled={props.busy !== null}
-                onClick={() => props.onSelectAccount(account.id)}
-              >
-                <span className="tui-menu-caret" aria-hidden="true">{selected ? ">" : " "}</span>
-                <span className={`tui-account-badge ${badgeToneClass(account.badge)}`}>[{account.badge.toUpperCase()}]</span>
-                <span className="tui-account-name">{account.username}</span>
-                <StatusText value={running ? "RUNNING" : account.ready ? "READY" : "RECONNECT"} tone={running ? "warning" : account.ready ? "success" : "warning"} />
-              </button>
-            );
-          })}
-        </div>
-        <div className="tui-pane-actions tui-pane-actions--stacked">
-          <button
-            type="button"
-            className="tui-action-button is-primary"
-            data-tui-nav-item
-            disabled={props.snapshotPending || props.busy !== null}
-            onClick={props.snapshotUnavailable ? props.onRefresh : () => { setAddMode("choose"); setAddOpen(true); }}
-          >
-            {props.snapshotPending ? "CHECKING..." : props.snapshotUnavailable ? "REFRESH" : "ADD ACCOUNT"}
-          </button>
-          <button type="button" className="tui-action-button" data-tui-nav-item disabled={props.busy !== null} onClick={props.onRefresh}>REFRESH LIST</button>
-        </div>
-      </Pane>
-
-      <Pane title="IDENTITY MANAGER">
-        <div className="tui-identity-detail">
-          <SkinViewer skin={props.skin} loading={props.skinLoading} username={selectedAccount?.username ?? "NONE"} />
-          <div className="tui-identity-info">
-            <KeyValueList rows={accountRows} />
-            <div className="tui-account-manager">
-              {selectedAccount ? (
-                <button
-                  type="button"
-                  className="tui-action-button is-danger"
-                  data-tui-nav-item
-                  disabled={props.busy !== null || selectedRunning}
-                  onClick={() => {
-                    if (pendingRemoveId === selectedAccount.id) props.onRemoveAccount(selectedAccount.id);
-                    else setPendingRemoveId(selectedAccount.id);
-                  }}
-                >
-                  {selectedRunning ? "INSTANCE IS RUNNING" : pendingRemoveId === selectedAccount.id ? "CONFIRM REMOVE" : "REMOVE SELECTED"}
-                </button>
-              ) : <p className="tui-empty-state">SELECT AN IDENTITY</p>}
-              {selectedAccount?.kind === "microsoft" && !selectedAccount.ready ? (
-                <button
-                  type="button"
-                  className="tui-action-button is-primary"
-                  data-tui-nav-item
-                  disabled={props.busy !== null}
-                  onClick={props.onStartMicrosoftLogin}
-                >
-                  RECONNECT OFFICIAL
-                </button>
-              ) : null}
-              {props.busy === "login" ? (
-                <button type="button" className="tui-action-button" disabled={props.loginCancelling} onClick={props.onCancelMicrosoftLogin}>
-                  {props.loginCancelling ? "CANCELLING..." : "CANCEL SIGN-IN"}
-                </button>
-              ) : null}
-              {props.developerTestProfileActive ? (
-                <button type="button" className="tui-action-button" data-tui-nav-item disabled={props.developerSimulationActive || props.busy !== null} onClick={props.onRunDeveloperSimulation}>
-                  {props.developerSimulationActive ? "SIMULATION RUNNING" : "RUN DEVELOPER SIMULATION"}
-                </button>
-              ) : null}
-            </div>
-          </div>
-        </div>
-      </Pane>
-
-      {addOpen ? (
-        <div className="tui-modal-layer" role="dialog" aria-modal="true" aria-labelledby="tui-add-account-title" onClick={closeAdd}>
-          <section className="tui-modal tui-add-account" onClick={(event) => event.stopPropagation()}>
-            <header>
-              <span id="tui-add-account-title">ADD ACCOUNT</span>
-              <button type="button" className="tui-modal-action" onClick={closeAdd}>CLOSE</button>
-            </header>
-            {addMode === "choose" ? (
-              <div className="tui-add-choice">
-                <button
-                  type="button"
-                  className="tui-choice-card"
-                  disabled={props.busy !== null || props.snapshotUnavailable}
-                  onClick={() => { closeAdd(); props.onStartMicrosoftLogin(); }}
-                >
-                  <strong>OFFICIAL</strong>
-                  <span>Microsoft account</span>
-                  <span className="tui-choice-note">Java Edition ownership verified · real skin</span>
-                </button>
-                <button
-                  type="button"
-                  className="tui-choice-card"
-                  disabled={props.busy !== null}
-                  onClick={() => setAddMode("unofficial")}
-                >
-                  <strong>UNOFFICIAL</strong>
-                  <span>Offline profile</span>
-                  <span className="tui-choice-note">Username only · no online play</span>
-                </button>
-              </div>
-            ) : (
-              <div className="tui-form-stack">
-                <label htmlFor="tui-offline-username">Unofficial username</label>
-                <input
-                  id="tui-offline-username"
-                  type="text"
-                  value={props.offlineUsername}
-                  minLength={3}
-                  maxLength={16}
-                  spellCheck={false}
-                  autoFocus
-                  placeholder="Minecraft username"
-                  onChange={(event) => props.onOfflineUsernameChange(event.target.value)}
-                  disabled={props.busy !== null}
-                  onKeyDown={(event) => { if (event.key === "Enter" && offlineUsernameValid) props.onSaveOfflineProfile(); }}
-                />
-                <p className={offlineUsernameValid ? "tui-help is-valid" : "tui-help"}>3-16 letters, numbers, or underscores.</p>
-                <div className="tui-modal-buttons">
-                  <button type="button" className="tui-action-button" onClick={() => setAddMode("choose")} disabled={props.busy !== null}>BACK</button>
-                  <button type="button" className="tui-action-button is-primary" disabled={!offlineUsernameValid || props.busy !== null} onClick={props.onSaveOfflineProfile}>
-                    ADD UNOFFICIAL PROFILE
-                  </button>
-                </div>
-              </div>
-            )}
-          </section>
-        </div>
-      ) : null}
+            return <div className={`account-row ${selected ? "is-selected" : ""}`} key={account.id}>
+              <button type="button" className="account-row__select" aria-label={`Select ${account.username}`} aria-pressed={selected} onClick={() => props.onSelectAccount(account.id)}>
+                <AccountHeadAvatar skinDataUrl={accountSkin?.dataUrl} username={account.username} size={36} />
+                <span><strong className="account-username">{account.username}</strong><small>{account.uuid ? compactUuid(account.uuid) : "Offline profile"}</small></span></button>
+              <div className="account-row__meta">{selected && props.skinLoading ? <StatusBadge tone="muted">Loading skin</StatusBadge> : null}
+                <StatusBadge tone={running ? "success" : account.ready ? "normal" : "warning"}>{running ? "Running" : account.kind}</StatusBadge>
+                <button type="button" className="button-danger button-compact" disabled={props.busy !== null || running} onClick={() => props.onRemoveAccount(account.id)}>Remove</button></div>
+            </div>;
+          })}</div>}
+      </Surface>
     </div>
-  );
+  </section>;
 }
 
-function ModulesScreen(props: {
-  utilities: readonly TuiUtilityDefinition[];
-  preferences: Record<TuiUtilityId, TuiUtilityPreference>;
-  saveStatus: "loading" | "saved" | "saving" | "error";
-  selectedId: TuiUtilityId;
-  onSelect: (id: TuiUtilityId) => void;
+function ModulesPage(props: {
+  utilities: readonly TuiUtilityDefinition[]; preferences: Record<TuiUtilityId, TuiUtilityPreference>;
+  saveStatus: "loading" | "saved" | "saving" | "error"; enabledCount: number; onBack: () => void;
+  onChange: (id: TuiUtilityId, update: Partial<TuiUtilityPreference>) => void; onOpenUtilities: (id: TuiUtilityId) => void;
+}) {
+  return <section className="launcher-page" aria-labelledby="modules-title">
+    <PageHeader id="modules-title" eyebrow="Client overlays" title="Modules" description="Enable only the information overlays you want available in game."
+      onBack={props.onBack} aside={<SaveStatus status={props.saveStatus} label={`${props.enabledCount} enabled`} />} />
+    <Surface title="Available modules" detail="Changes save automatically">
+      {props.utilities.length === 0 ? <EmptyState title="No modules available" detail="The launcher did not report any configurable overlays." />
+        : <div className="module-list">{props.utilities.map((utility) => {
+          const preference = props.preferences[utility.id];
+          return <div className="module-row" key={utility.id}><span className="module-row__icon" aria-hidden="true">{utility.icon}</span>
+            <div className="module-row__copy"><strong>{utility.name}</strong><span>{utility.description}</span></div>
+            <span className="module-row__category">{utility.category}</span>
+            <button type="button" className="button-quiet button-compact" onClick={() => props.onOpenUtilities(utility.id)}>Configure</button>
+            <SwitchControl label={`${preference.enabled ? "Disable" : "Enable"} ${utility.name}`} checked={preference.enabled}
+              onChange={() => props.onChange(utility.id, { enabled: !preference.enabled })} />
+          </div>;
+        })}</div>}
+    </Surface>
+  </section>;
+}
+
+function UtilitiesPage(props: {
+  utilities: readonly TuiUtilityDefinition[]; preferences: Record<TuiUtilityId, TuiUtilityPreference>;
+  saveStatus: "loading" | "saved" | "saving" | "error"; selected: TuiUtilityDefinition | null;
+  preference: TuiUtilityPreference | null; onBack: () => void; onSelect: (id: TuiUtilityId) => void;
   onChange: (id: TuiUtilityId, update: Partial<TuiUtilityPreference>) => void;
 }) {
-  const selectedIndex = Math.max(0, props.utilities.findIndex((utility) => utility.id === props.selectedId));
-  const selected = props.utilities[selectedIndex];
-  const preference = selected ? props.preferences[selected.id] : undefined;
-  const items = props.utilities.map<MenuItem>((utility) => ({
-    id: utility.id,
-    label: utility.name,
-    value: props.preferences[utility.id].enabled ? "ON" : "OFF",
-    tone: props.preferences[utility.id].enabled ? "success" : "muted",
-  }));
-  return (
-    <div className="tui-page-grid">
-      <Pane title="MODULES" footer={<span>AUTOSAVE: {props.saveStatus.toUpperCase()}</span>}>
-        <MenuList
-          items={items}
-          selectedIndex={selectedIndex}
-          onSelect={(index) => {
-            const utility = props.utilities[index];
-            if (utility) props.onSelect(utility.id);
-          }}
-          onActivate={(index) => {
-            const utility = props.utilities[index];
-            if (utility) props.onChange(utility.id, { enabled: !props.preferences[utility.id].enabled });
-          }}
-        />
-      </Pane>
-      <Pane title="DETAILS">
-        {selected && preference ? (
-          <div className="tui-module-detail">
-            <div className="tui-detail-heading">
-              <div><span>{selected.category.toUpperCase()}</span><h3>{selected.name}</h3></div>
-              <button type="button" className={`tui-toggle-button ${preference.enabled ? "is-on" : ""}`} onClick={() => props.onChange(selected.id, { enabled: !preference.enabled })}>
-                {preference.enabled ? "ON" : "OFF"}
-              </button>
-            </div>
-            <p>{selected.purpose}</p>
-            <div className="tui-form-grid">
-              <label>Anchor
-                <select value={preference.anchor} onChange={(event) => props.onChange(selected.id, { anchor: event.target.value as TuiUtilityAnchor })}>
-                  {(Object.entries(utilityAnchorLabels) as [TuiUtilityAnchor, string][]).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-                </select>
-              </label>
-              <label>Offset
-                <input type="text" value={preference.offset} maxLength={24} onChange={(event) => props.onChange(selected.id, { offset: event.target.value })} />
-              </label>
-              <label>Scale <output>{preference.scale}%</output>
-                <input type="range" min={50} max={150} step={5} value={preference.scale} onChange={(event) => props.onChange(selected.id, { scale: Number(event.target.value) })} />
-              </label>
-              <label>Opacity <output>{preference.opacity}%</output>
-                <input type="range" min={25} max={100} step={5} value={preference.opacity} onChange={(event) => props.onChange(selected.id, { opacity: Number(event.target.value) })} />
-              </label>
-            </div>
-          </div>
-        ) : <p>No module selected.</p>}
-      </Pane>
+  return <section className="launcher-page" aria-labelledby="utilities-title">
+    <PageHeader id="utilities-title" eyebrow="Overlay placement" title="Utilities" description="Tune position and visibility for each existing client overlay."
+      onBack={props.onBack} aside={<SaveStatus status={props.saveStatus} />} />
+    <div className="utility-grid">
+      <Surface title="Utility" detail={`${props.utilities.length} available`}>
+        {props.utilities.length === 0 ? <EmptyState title="No utilities available" detail="There is nothing to configure in this snapshot." />
+          : <div className="utility-menu">{props.utilities.map((utility) => <button key={utility.id} type="button"
+            className={props.selected?.id === utility.id ? "is-active" : ""} aria-pressed={props.selected?.id === utility.id} onClick={() => props.onSelect(utility.id)}>
+            <span>{utility.icon}</span><strong>{utility.name}</strong><small>{props.preferences[utility.id].enabled ? "On" : "Off"}</small></button>)}</div>}
+      </Surface>
+      <Surface title={props.selected?.name ?? "Configuration"} detail={props.selected?.purpose ?? "Select a utility"}>
+        {props.selected && props.preference ? <div className="utility-editor"><div className="utility-editor__status">
+          <div><strong>{props.selected.name}</strong><span>{props.selected.description}</span></div>
+          <SwitchControl label={`${props.preference.enabled ? "Disable" : "Enable"} ${props.selected.name}`} checked={props.preference.enabled}
+            onChange={() => props.onChange(props.selected!.id, { enabled: !props.preference!.enabled })} /></div>
+          <div className="form-grid"><div className="field-control"><label htmlFor="utility-anchor">Anchor</label>
+            <select id="utility-anchor" value={props.preference.anchor} onChange={(event) => props.onChange(props.selected!.id, { anchor: event.target.value as TuiUtilityAnchor })}>
+              {(Object.entries(utilityAnchorLabels) as [TuiUtilityAnchor, string][]).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></div>
+            <div className="field-control"><label htmlFor="utility-offset">Offset</label><input id="utility-offset" type="text" maxLength={24}
+              value={props.preference.offset} onChange={(event) => props.onChange(props.selected!.id, { offset: event.target.value })} /></div>
+            <div className="field-control field-control--range"><div><label htmlFor="utility-scale">Scale</label><output htmlFor="utility-scale">{props.preference.scale}%</output></div>
+              <input id="utility-scale" type="range" min={50} max={150} step={5} value={props.preference.scale}
+                onChange={(event) => props.onChange(props.selected!.id, { scale: Number(event.target.value) })} /></div>
+            <div className="field-control field-control--range"><div><label htmlFor="utility-opacity">Opacity</label><output htmlFor="utility-opacity">{props.preference.opacity}%</output></div>
+              <input id="utility-opacity" type="range" min={25} max={100} step={5} value={props.preference.opacity}
+                onChange={(event) => props.onChange(props.selected!.id, { opacity: Number(event.target.value) })} /></div></div>
+        </div> : <EmptyState title="No utility selected" detail="Choose an available utility to edit its placement." />}
+      </Surface>
     </div>
-  );
+  </section>;
 }
 
-function SettingsScreen(props: {
-  index: number;
-  setIndex: (index: number) => void;
-  settings: TuiSettings;
-  snapshot: TuiSnapshot | null;
-  optifineReady: boolean;
-  optifineSourcePath: string;
-  busy: string | null;
-  onSettingsChange: (settings: TuiSettings) => void;
-  onOptiFineSourcePathChange: (value: string) => void;
-  onImportOptiFine: () => void;
-  onSave: () => void;
+function SettingsPage(props: {
+  settings: TuiSettings; snapshot: TuiSnapshot | null; appearance: LauncherAppearance; busy: string | null;
+  developerProfile: TuiSnapshot["developerTestProfile"] | undefined; onBack: () => void;
+  onAppearanceChange: (appearance: LauncherAppearance) => void; onSettingsChange: (settings: TuiSettings) => void;
+  onSaveSettings: () => void; onRunDeveloperSimulation: () => void; onQuit: () => void;
 }) {
-  const items: readonly MenuItem[] = [
-    { id: "memory", label: "Memory", value: `${props.settings.maxMemoryMib} MB` },
-    { id: "launcher", label: "Launcher behavior", value: props.settings.closeLauncherOnGameStart ? "HIDE" : "STAY OPEN" },
-    { id: "optifine", label: "OptiFine", value: props.optifineReady ? "READY" : "MISSING", tone: props.optifineReady ? "success" : "warning" },
-    { id: "directory", label: "Game Directory", value: "VIEW" },
-  ];
-  return (
-    <div className="tui-page-grid">
-      <Pane title="SETTINGS">
-        <MenuList items={items} selectedIndex={props.index} onSelect={props.setIndex} />
-      </Pane>
-      <Pane title="VALUE">
-        {props.index === 0 ? (
-          <div className="tui-setting-editor">
-            <label htmlFor="tui-memory">Memory allocation</label>
-            <output>{props.settings.maxMemoryMib} MB</output>
-            <input
-              id="tui-memory"
-              type="range"
-              min={512}
-              max={8192}
-              step={256}
-              value={props.settings.maxMemoryMib}
-              disabled={props.busy !== null}
-              onChange={(event) => props.onSettingsChange({ ...props.settings, maxMemoryMib: Number(event.target.value) })}
-            />
-            <div className="tui-range-labels"><span>512 MB</span><span>8192 MB</span></div>
-          </div>
-        ) : null}
-        {props.index === 1 ? (
-          <div className="tui-setting-editor">
-            <p>Keep launcher visibility predictable after Minecraft starts.</p>
-            <label className="tui-checkbox-row">
-              <input
-                type="checkbox"
-                checked={props.settings.closeLauncherOnGameStart}
-                disabled={props.busy !== null}
-                onChange={(event) => props.onSettingsChange({ ...props.settings, closeLauncherOnGameStart: event.target.checked })}
-              />
-              <span>Hide Opus Launcher while Minecraft is open</span>
-            </label>
-          </div>
-        ) : null}
-        {props.index === 2 ? (
-          <div className="tui-setting-editor">
-            <KeyValueList rows={[{ label: "Required", value: "OptiFine 1.8.9 HD U M5" }, { label: "Status", value: props.optifineReady ? "READY" : "MISSING", tone: props.optifineReady ? "success" : "warning" }]} />
-            <label htmlFor="tui-optifine-path">Local JAR path</label>
-            <input
-              id="tui-optifine-path"
-              type="text"
-              value={props.optifineSourcePath}
-              disabled={props.optifineReady || props.busy !== null}
-              placeholder="/path/to/OptiFine_1.8.9_HD_U_M5.jar"
-              onChange={(event) => props.onOptiFineSourcePathChange(event.target.value)}
-            />
-            <button type="button" className="tui-action-button" disabled={props.optifineReady || props.busy !== null || props.optifineSourcePath.trim().length === 0} onClick={props.onImportOptiFine}>
-              {props.busy === "optifine" ? "VERIFYING..." : "IMPORT AND VERIFY"}
-            </button>
-          </div>
-        ) : null}
-        {props.index === 3 ? (
-          <div className="tui-setting-editor">
-            <label>Opus data directory</label>
-            <code>{props.snapshot?.dataDirectory ?? "Unavailable"}</code>
-            <p>This isolated directory does not modify the normal .minecraft installation.</p>
-          </div>
-        ) : null}
-        <div className="tui-pane-actions">
-          <button type="button" className="tui-action-button is-primary" disabled={props.busy !== null} onClick={props.onSave}>
-            {props.busy === "settings" ? "SAVING..." : "SAVE SETTINGS"}
-          </button>
-        </div>
-      </Pane>
+  return <section className="launcher-page" aria-labelledby="settings-title">
+    <PageHeader id="settings-title" eyebrow="Launcher preferences" title="Settings"
+      description="Control launch memory, lifecycle behavior, and the bounded Home media treatment." onBack={props.onBack} />
+    <div className="settings-grid">
+      <Surface title="System" detail={props.snapshot?.platform ?? "Platform unavailable"}><div className="form-stack">
+        <div className="setting-row"><div><strong>Client Edition</strong><span>Standard runs standalone OpusLoader; Forge supports Forge coremods and custom mods.</span></div>
+          <div className="preset-row">
+            <button type="button" className={props.settings.launchProfileType !== "forge" ? "is-active" : ""} disabled={props.busy !== null}
+              onClick={() => props.onSettingsChange({ ...props.settings, launchProfileType: "standalone" })}>Standard (OpusLoader)</button>
+            <button type="button" className={props.settings.launchProfileType === "forge" ? "is-active" : ""} disabled={props.busy !== null}
+              onClick={() => props.onSettingsChange({ ...props.settings, launchProfileType: "forge" })}>Opus + Forge</button>
+          </div></div>
+        <div className="field-control field-control--range"><div><label htmlFor="allocated-memory">Allocated memory</label><output htmlFor="allocated-memory">{props.settings.maxMemoryMib} MB</output></div>
+          <input id="allocated-memory" type="range" min={512} max={8192} step={256} value={props.settings.maxMemoryMib} disabled={props.busy !== null}
+            onChange={(event) => props.onSettingsChange({ ...props.settings, maxMemoryMib: Number(event.target.value) })} />
+          <div className="preset-row">{[2048, 4096, 6144, 8192].map((preset) => <button key={preset} type="button"
+            className={props.settings.maxMemoryMib === preset ? "is-active" : ""} disabled={props.busy !== null}
+            onClick={() => props.onSettingsChange({ ...props.settings, maxMemoryMib: preset })}>{preset / 1024} GB</button>)}</div></div>
+        <div className="setting-row"><div><strong>Close on game start</strong><span>Exit the launcher after Minecraft starts successfully.</span></div>
+          <SwitchControl label="Close launcher on game start" checked={props.settings.closeLauncherOnGameStart} disabled={props.busy !== null}
+            onChange={() => props.onSettingsChange({ ...props.settings, closeLauncherOnGameStart: !props.settings.closeLauncherOnGameStart })} /></div>
+        <div className="directory-row"><span>Data directory</span><code>{props.snapshot?.dataDirectory ?? "Unavailable"}</code></div>
+      </div></Surface>
+      <Surface title="Appearance" detail="Home media only"><div className="form-stack">
+        <div className="field-control"><label>Accent</label><div className="option-grid option-grid--themes">{themeOptions.map((theme) => <button key={theme.id} type="button"
+          className={props.appearance.theme === theme.id ? "is-active" : ""} data-tone={theme.id} aria-pressed={props.appearance.theme === theme.id}
+          onClick={() => props.onAppearanceChange({ ...props.appearance, theme: theme.id })}><span aria-hidden="true" />{theme.label}</button>)}</div></div>
+        <div className="field-control"><label>Home media</label><div className="option-grid">{backdropOptions.map((backdrop) => <button key={backdrop.id} type="button"
+          className={props.appearance.backdrop === backdrop.id ? "is-active" : ""} aria-pressed={props.appearance.backdrop === backdrop.id}
+          onClick={() => props.onAppearanceChange({ ...props.appearance, backdrop: backdrop.id })}><strong>{backdrop.label}</strong><small>{backdrop.detail}</small></button>)}</div></div>
+        <div className="field-control field-control--range"><div><label htmlFor="media-softness">Media softness</label><output htmlFor="media-softness">{props.appearance.glassBlur}</output></div>
+          <input id="media-softness" type="range" min={4} max={24} value={props.appearance.glassBlur}
+            onChange={(event) => props.onAppearanceChange({ ...props.appearance, glassBlur: Number(event.target.value) })} /></div>
+        <div className="field-control field-control--range"><div><label htmlFor="media-opacity">Media opacity</label><output htmlFor="media-opacity">{props.appearance.glassOpacity}%</output></div>
+          <input id="media-opacity" type="range" min={40} max={95} value={props.appearance.glassOpacity}
+            onChange={(event) => props.onAppearanceChange({ ...props.appearance, glassOpacity: Number(event.target.value) })} /></div>
+      </div></Surface>
     </div>
-  );
+    {props.developerProfile?.available ? <Surface title="Developer profile" detail="Visible only in development-enabled builds"><div className="setting-row">
+      <div><strong>{props.developerProfile.active ? "Developer profile active" : "Developer simulation"}</strong><span>Exercise the launch lifecycle without starting Minecraft.</span></div>
+      <button type="button" className="button-secondary" disabled={props.developerProfile.simulationActive || props.busy !== null} onClick={props.onRunDeveloperSimulation}>
+        {props.developerProfile.simulationActive ? "Simulation running" : props.developerProfile.active ? "Disable profile" : "Run simulation"}</button></div></Surface> : null}
+    <div className="settings-actions"><button type="button" className="launcher-primary" disabled={props.busy !== null} onClick={props.onSaveSettings}>
+      {props.busy === "saving" ? "Saving…" : "Save settings"}</button><button type="button" className="button-secondary" disabled={props.busy !== null} onClick={props.onQuit}>Quit launcher</button></div>
+  </section>;
 }
 
-function LogsScreen(props: {
-  category: (typeof logCategories)[number];
-  onCategoryChange: (category: (typeof logCategories)[number]) => void;
-  lines: readonly string[];
-  dataDirectory: string;
-  onRefresh: () => void;
+function LogsPage(props: {
+  category: LogCategory; lines: readonly string[]; dataDirectory: string; copyStatus: "idle" | "copied" | "failed";
+  onBack: () => void; onCategoryChange: (category: LogCategory) => void; onCopy: () => void; onRefresh: () => void;
 }) {
-  const items = logCategories.map<MenuItem>((category) => ({ id: category, label: category, value: category === props.category ? "ACTIVE" : undefined }));
-  const selectedIndex = logCategories.indexOf(props.category);
-  return (
-    <div className="tui-page-grid">
-      <Pane title="LOGS">
-        <MenuList
-          items={items}
-          selectedIndex={selectedIndex}
-          onSelect={(index) => props.onCategoryChange(logCategories[index] ?? "Launcher")}
-          onActivate={(index) => props.onCategoryChange(logCategories[index] ?? "Launcher")}
-        />
-        <button type="button" className="tui-action-button" onClick={props.onRefresh}>REFRESH</button>
-      </Pane>
-      <Pane title={props.category.toUpperCase()} footer={<span>DATA: {props.dataDirectory}</span>}>
-        <LogView lines={props.lines} />
-      </Pane>
-    </div>
-  );
+  return <section className="launcher-page" aria-labelledby="logs-title">
+    <PageHeader id="logs-title" eyebrow="Diagnostics" title="Logs"
+      description="Read the current launcher snapshot without presenting preview data as a live game session." onBack={props.onBack}
+      aside={<StatusBadge tone="muted">{props.category}</StatusBadge>} />
+    <Surface title="Diagnostic log" detail={`Data: ${props.dataDirectory}`}><div className="log-toolbar">
+      <div className="log-categories" aria-label="Log category">{logCategories.map((category) => <button key={category} type="button"
+        className={props.category === category ? "is-active" : ""} aria-pressed={props.category === category} onClick={() => props.onCategoryChange(category)}>{category}</button>)}</div>
+      <div className="panel-actions"><button type="button" className="button-secondary button-compact" onClick={props.onRefresh}>Refresh</button>
+        <button type="button" className="button-secondary button-compact" aria-label="Copy log" onClick={props.onCopy}>
+          {props.copyStatus === "copied" ? "Copied" : props.copyStatus === "failed" ? "Copy failed" : "Copy log"}</button></div></div>
+      <pre className="log-terminal" aria-live="polite">{props.lines.length > 0 ? props.lines.join("\n") : "No log entries."}</pre>
+    </Surface>
+  </section>;
 }
 
-function InstanceManager(props: {
-  instances: readonly TuiInstance[];
-  busy: string | null;
-  onKill: (sessionId: string) => void;
-}) {
-  return (
-    <div className="tui-instance-manager">
-      <div className="tui-instance-manager-head">
-        <span>ACTIVE INSTANCES</span>
-        <strong>{String(props.instances.length).padStart(2, "0")}</strong>
-      </div>
-      {props.instances.length === 0 ? (
-        <p className="tui-instance-empty">No running instances.</p>
-      ) : (
-        <ul className="tui-instance-list">
-          {props.instances.map((instance) => (
-            <li key={instance.sessionId} className="tui-instance-row">
-              <span className={`tui-account-badge ${badgeToneClass(instance.badge)}`}>[{instance.badge.toUpperCase()}]</span>
-              <span className="tui-instance-name" title={instance.title}>{instance.username}</span>
-              <StatusText value="RUNNING" tone="warning" />
-              <button
-                type="button"
-                className="tui-instance-kill"
-                data-tui-nav-item
-                disabled={props.busy !== null}
-                onClick={() => props.onKill(instance.sessionId)}
-              >
-                KILL
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
-  );
+function PageHeader(props: { id: string; eyebrow: string; title: string; description?: string; onBack?: () => void; aside?: ReactNode; focusable?: boolean }) {
+  return <header className="page-header"><div className="page-header__copy">
+    {props.onBack ? <button type="button" className="page-back" onClick={props.onBack}><ArrowLeftIcon />Home</button> : null}
+    <span className="page-eyebrow">{props.eyebrow}</span><h1 id={props.id} tabIndex={props.focusable ? -1 : undefined}>{props.title}</h1>{props.description ? <p>{props.description}</p> : null}</div>
+    {props.aside ? <div className="page-header__aside">{props.aside}</div> : null}</header>;
 }
 
-function LaunchDock(props: {
-  account: TuiAccount | null;
-  accountRunning: boolean;
-  activeLaunchCount: number;
-  ready: boolean;
-  busy: string | null;
-  developerTestProfileActive: boolean;
-  developerSimulationActive: boolean;
-  onLaunch: () => void;
-  onOpenAccounts: () => void;
-  onOpenSetup: () => void;
-}) {
-  const launchLabel = props.developerTestProfileActive
-    ? props.developerSimulationActive ? "SIMULATION RUNNING" : "RUN SIMULATION"
-    : props.accountRunning ? "INSTANCE RUNNING"
-      : props.busy === "launch" ? "LAUNCHING..."
-        : props.ready ? "LAUNCH MINECRAFT" : "OPEN SETUP";
-  return (
-    <section className="tui-launch-dock" aria-label="Launch Minecraft">
-      <button type="button" className="tui-launch-identity" onClick={props.onOpenAccounts}>
-        {props.account ? <span className={`tui-account-badge ${badgeToneClass(props.account.badge)}`}>[{props.account.badge.toUpperCase()}]</span> : <span className="tui-account-badge">[NONE]</span>}
-        <strong>{props.account?.username ?? "SELECT AN IDENTITY"}</strong>
-        <StatusText value={props.accountRunning ? "RUNNING" : props.account?.ready ? "READY" : "REQUIRED"} tone={props.accountRunning || props.account?.ready ? "warning" : "muted"} />
-      </button>
-      <div className="tui-launch-summary">
-        <span>ACTIVE INSTANCES</span>
-        <strong>{String(props.activeLaunchCount).padStart(2, "0")}</strong>
-      </div>
-      <button
-        type="button"
-        className="tui-launch-button"
-        disabled={props.busy !== null || props.accountRunning || props.developerSimulationActive}
-        onClick={props.developerTestProfileActive || props.ready ? props.onLaunch : props.onOpenSetup}
-      >
-        <span aria-hidden="true">&gt;</span>
-        {launchLabel}
-      </button>
-    </section>
-  );
+function Surface(props: { title: string; detail?: string; children: ReactNode }) {
+  return <section className="surface-panel"><header className="surface-header"><div><h2>{props.title}</h2>{props.detail ? <p>{props.detail}</p> : null}</div></header>
+    <div className="surface-content">{props.children}</div></section>;
 }
 
-function TaskOverlay(props: {
-  busy: string;
-  progress: TuiInstallProgress | null;
-  account: TuiAccount | null;
-  loginCancelling: boolean;
-  onCancelLogin: () => void;
-}) {
-  const task = taskPresentation(props.busy, props.account);
-  const installing = props.busy === "install";
-  const progress = props.progress ?? {
-    phase: "Starting installer",
-    completedFiles: 0,
-    totalFiles: 0,
-    downloadedFiles: 0,
-    cachedFiles: 0,
-  };
-  const percent = progress.totalFiles > 0
-    ? Math.min(100, Math.round((progress.completedFiles / progress.totalFiles) * 100))
-    : 0;
-  const lines = installing ? [
-    `phase.............................. ${progress.phase}`,
-    `verified........................... ${progress.cachedFiles}`,
-    `downloaded......................... ${progress.downloadedFiles}`,
-    progress.totalFiles > 0
-      ? `files.............................. ${progress.completedFiles}/${progress.totalFiles}`
-      : "files.............................. PREPARING",
-  ] : [task.detail];
-  return (
-    <div className="tui-modal-layer" role="dialog" aria-modal="true" aria-labelledby="tui-task-title">
-      <section className="tui-modal">
-        <header><span id="tui-task-title">{task.title}</span><StatusText value="RUNNING" tone="warning" /></header>
-        <LogView lines={lines} />
-        {installing ? <ProgressBar value={percent} label="Installation progress" /> : (
-          <div className="tui-activity" role="progressbar" aria-label={task.title}><span /></div>
-        )}
-        <footer>
-          <span>{task.footer}</span>
-          {props.busy === "login" ? (
-            <button type="button" className="tui-modal-action" disabled={props.loginCancelling} onClick={props.onCancelLogin}>
-              {props.loginCancelling ? "CANCELLING..." : "CANCEL"}
-            </button>
-          ) : null}
-        </footer>
-      </section>
-    </div>
-  );
+function OperationalRow(props: { label: string; value: string; tone?: StatusTone; onClick?: () => void }) {
+  const content = <><span>{props.label}</span><StatusBadge tone={props.tone ?? "normal"}>{props.value}</StatusBadge>{props.onClick ? <ArrowRightIcon /> : null}</>;
+  return props.onClick ? <button type="button" className="operational-row" title={props.value} onClick={props.onClick}>{content}</button> : <div className="operational-row" title={props.value}>{content}</div>;
 }
 
-function taskPresentation(busy: string, account: TuiAccount | null) {
-  const identity = account ? `[${account.badge.toUpperCase()}] ${account.username}` : "selected identity";
-  switch (busy) {
-    case "install":
-      return { title: "INSTALL / VERIFY", detail: "Preparing managed runtime", footer: "Keep Opus Launcher open until verification completes." };
-    case "launch":
-      return { title: "LAUNCHING MINECRAFT", detail: `Preparing isolated instance for ${identity}`, footer: "Authenticating, verifying mods and handing off to Java." };
-    case "login":
-      return { title: "MICROSOFT SIGN-IN", detail: "Waiting for the secure browser sign-in to complete", footer: "Finish sign-in in your browser." };
-    case "optifine":
-      return { title: "VERIFYING OPTIFINE", detail: "Checking the selected JAR and importing it into Opus", footer: "The source file will not be modified." };
-    case "settings":
-      return { title: "SAVING SETTINGS", detail: "Writing launcher settings atomically", footer: "Settings are being committed." };
-    case "offline-profile":
-      return { title: "ADDING UNOFFICIAL PROFILE", detail: "Creating an isolated offline identity", footer: "The profile will appear in the shared launch list." };
-    case "account-select":
-      return { title: "SELECTING IDENTITY", detail: `Selecting ${identity}`, footer: "The next launch will use this identity." };
-    case "account-remove":
-      return { title: "REMOVING IDENTITY", detail: `Removing ${identity}`, footer: "Saved credentials for this identity are being deleted." };
-    default:
-      return { title: "OPUS LAUNCHER", detail: `Running ${busy}`, footer: "Please wait for the operation to complete." };
-  }
+function StatusBadge(props: { tone?: StatusTone; children: ReactNode }) {
+  return <span className={`status-badge is-${props.tone ?? "normal"}`}><i aria-hidden="true" />{props.children}</span>;
 }
-
-function badgeToneClass(badge: string) {
-  if (badge.toLowerCase() === "premium") return "is-premium";
-  if (badge.toLowerCase() === "official") return "is-official";
-  if (badge.toLowerCase() === "unofficial") return "is-unofficial";
-  return "is-generic";
+function SaveStatus(props: { status: "loading" | "saved" | "saving" | "error"; label?: string }) {
+  const tone: StatusTone = props.status === "error" ? "danger" : props.status === "saved" ? "success" : "muted";
+  return <StatusBadge tone={tone}>{props.label ? `${props.label} · ` : ""}{sentenceCase(props.status)}</StatusBadge>;
 }
-
+function SwitchControl(props: { label: string; checked: boolean; disabled?: boolean; onChange: () => void }) {
+  return <button type="button" role="switch" className={`switch-control ${props.checked ? "is-checked" : ""}`} aria-label={props.label}
+    aria-checked={props.checked} disabled={props.disabled} onClick={props.onChange}><span /></button>;
+}
+function EmptyState(props: { title: string; detail: string }) {
+  return <div className="empty-state"><strong>{props.title}</strong><span>{props.detail}</span></div>;
+}
+function RefreshIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6v5h-5M4 18v-5h5M6.2 8.1A7 7 0 0 1 18.8 9M17.8 15.9A7 7 0 0 1 5.2 15" /></svg>; }
+function ArrowLeftIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6" /></svg>; }
+function ArrowRightIcon() { return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6" /></svg>; }
 function compactUuid(uuid: string) {
   const compact = uuid.replaceAll("-", "");
-  return compact.length > 12 ? `${compact.slice(0, 6)}...${compact.slice(-6)}` : compact;
+  return compact.length > 12 ? `${compact.slice(0, 6)}…${compact.slice(-6)}` : compact;
 }
+function sentenceCase(value: string) { return value ? `${value.charAt(0).toUpperCase()}${value.slice(1)}` : value; }
 
-function buildLogLines(props: LauncherTuiProps, runtimeState: string): string[] {
+function buildLogLines(props: LauncherTuiProps, runtimeState: string, opusClientVerified: boolean, enabledUtilityCount: number): string[] {
+  const selectedAccount = props.snapshot?.accounts.find((account) => account.id === props.snapshot?.selectedAccountId);
   const lines = [
-    `launcher snapshot.................. ${props.snapshot ? "OK" : "UNAVAILABLE"}`,
-    `runtime state...................... ${runtimeState}`,
-    `minecraft 1.8.9.................... ${props.snapshot?.minecraftReady ? "READY" : "MISSING"}`,
-    `forge 11.15.1.2318................. ${props.snapshot?.minecraftReady ? "READY" : "MISSING"}`,
-    `optifine HD U M5................... ${props.snapshot?.optifineReady ? "READY" : "MISSING"}`,
-    `java runtime....................... ${props.snapshot?.javaStatus ?? "UNKNOWN"}`,
-    `identities......................... ${props.snapshot?.accounts.length ?? 0}`,
-    `selected identity.................. ${props.snapshot?.accounts.find((account) => account.id === props.snapshot?.selectedAccountId)?.username ?? "NONE"}`,
-    `active instances................... ${props.snapshot?.activeLaunches ?? 0}`,
+    `[INFO] Launcher snapshot ........... ${props.snapshot ? "OK" : "UNAVAILABLE"}`,
+    `[INFO] Runtime state ............... ${runtimeState.toUpperCase()}`,
+    `[INFO] Opus Client bundle ......... ${opusClientVerified ? "VERIFIED & READY" : "SETUP REQUIRED"}`,
+    `[INFO] Java runtime ............... ${props.snapshot?.javaStatus ?? "UNKNOWN"}`,
+    `[INFO] Identities count ........... ${props.snapshot?.accounts.length ?? 0}`,
+    `[INFO] Selected identity .......... ${selectedAccount?.username ?? "NONE"}`,
+    `[INFO] Active game instances ...... ${props.snapshot?.activeLaunches ?? 0}`,
+    `[INFO] Enabled modules ............ ${enabledUtilityCount}`,
   ];
-  if (props.busy) lines.push(`active operation................... ${props.busy.toUpperCase()}`);
-  if (props.notice) lines.push(`event.............................. ${props.notice}`);
-  if (props.error) lines.push(`error.............................. ${friendlyError(props.error)}`);
+  if (props.busy) lines.push(`[BUSY] Active operation ........... ${props.busy.toUpperCase()}`);
+  if (props.notice) lines.push(`[NOTICE] Event .................... ${props.notice}`);
+  if (props.error) lines.push(`[ERROR] Failure ................... ${friendlyError(props.error)}`);
   return lines;
 }
 
 function friendlyError(error: string) {
   const registrationPrefix = "Minecraft Services rejected Opus's application registration";
-  if (error.includes(registrationPrefix)) {
-    return "Microsoft sign-in completed, but Opus's application ID is still awaiting Minecraft Services approval.";
-  }
+  if (error.includes(registrationPrefix)) return "Microsoft sign-in completed, but Opus's application ID is still awaiting Minecraft Services approval.";
   return error;
 }

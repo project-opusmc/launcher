@@ -8,24 +8,28 @@ pub const FORGE_OPTIFINE_FILE_NAME: &str = "OptiFine_1.8.9_HD_U_M5.jar";
 /// The reproducible Opus coremod artifact staged beside the desktop launcher.
 /// The unified launcher always uses these reviewed bytes so artifact drift
 /// cannot produce a build that installs successfully but cannot launch.
-pub const FORGE_COREMOD_SHA1: &str = "3656626a481a87e27abfeb02c204ba96b6093c41";
-pub const FORGE_COREMOD_SIZE: u64 = 66_155;
-pub const FORGE_NATIVE_UI_SHA1: &str = "d5879627429a39f8ba853d0095feeb114789baf6";
-pub const FORGE_NATIVE_UI_SIZE: u64 = 486_061;
+pub const FORGE_COREMOD_SHA1: &str = "b327971cfb925667ec2c6b25b5dd6881b4d0164f";
+pub const FORGE_COREMOD_SIZE: u64 = 72_600;
+pub const STANDALONE_LOADER_SHA1: &str = "edeb103b1047171ddd15059a549cacbd6d6a72aa";
+pub const STANDALONE_LOADER_SIZE: u64 = 442_873;
+pub const FORGE_NATIVE_UI_SHA1: &str = "6d2c125f815ad450280b0f6fc5e26889518b7060";
+pub const FORGE_NATIVE_UI_SIZE: u64 = 10_213_978;
 /// The sealed LWJGL 2.9.2 compatibility artifact. It preserves Minecraft's
 /// stock pixel-format request, bypasses the obsolete display-mode query, and
 /// coalesces native Cocoa live-resize geometry without blocking AppKit on a
 /// full Minecraft frame for every intermediate mouse position.
-pub const FORGE_LWJGL_MACOS_COMPAT_SHA1: &str = "1798902532ab2bf3ee72b3011426823f17b7a1c8";
-pub const FORGE_LWJGL_MACOS_COMPAT_SIZE: u64 = 1_200_327;
-/// The verified 2.9.2 nightly universal native with the obsolete AppKit
-/// surface-update callback disabled. The Java/render thread owns the final
-/// drawable update after the live-resize handshake.
-pub const FORGE_LWJGL_MACOS_NATIVE_SHA1: &str = "9ade823779dae4be29556dc39ed28b42ba5508e1";
+pub const FORGE_LWJGL_MACOS_COMPAT_SHA1: &str = "397a083e0208317aa6f598a3ece58e706d7a75f9";
+pub const FORGE_LWJGL_MACOS_COMPAT_SIZE: u64 = 1_202_775;
+/// The verified 2.9.2 nightly universal native. The compatibility guard
+/// defers AppKit drawable/focus notifications so only the render thread
+/// updates the game context, including fullscreen and backing-scale changes.
+pub const FORGE_LWJGL_MACOS_NATIVE_SHA1: &str = "5d53a208e2f5bffa1d8d4b3755190fb5cb835022";
 pub const FORGE_LWJGL_MACOS_NATIVE_SIZE: u64 = 838_892;
 pub const FORGE_LWJGL_RESIZE_GUARD_FILE_NAME: &str = "libopus_lwjgl_resize_guard.dylib";
-pub const FORGE_LWJGL_RESIZE_GUARD_SHA1: &str = "b80da68bc3de6c8823bcfdee42d660a90246a09f";
-pub const FORGE_LWJGL_RESIZE_GUARD_SIZE: u64 = 15_696;
+pub const FORGE_LWJGL_RESIZE_GUARD_SHA1: &str = "6005c797463267ed1089231d3b6fb88f3bc0b0fd";
+pub const FORGE_LWJGL_RESIZE_GUARD_SIZE: u64 = 21_184;
+pub const FORGE_LWJGL_RESIZE_GUARD_MARKER: &str =
+    "OPUS_COCOA_LIVE_RESIZE_GUARD_V14_RENDER_THREAD_DRAWABLE_OWNERSHIP";
 
 const FORGE_LOCK_JSON: &str = include_str!("../runtime-lock/forge-1.8.9-11.15.1.2318.lock.json");
 
@@ -177,17 +181,27 @@ mod tests {
         assert_eq!(lock.optifine.size, 2_585_014);
         assert_eq!(
             FORGE_COREMOD_SHA1,
-            "3656626a481a87e27abfeb02c204ba96b6093c41"
+            "b327971cfb925667ec2c6b25b5dd6881b4d0164f"
         );
-        assert_eq!(FORGE_COREMOD_SIZE, 66_155);
+        assert_eq!(FORGE_COREMOD_SIZE, 72_600);
+        assert_eq!(
+            STANDALONE_LOADER_SHA1,
+            "edeb103b1047171ddd15059a549cacbd6d6a72aa"
+        );
+        assert_eq!(STANDALONE_LOADER_SIZE, 442_873);
+        assert_eq!(
+            FORGE_NATIVE_UI_SHA1,
+            "6d2c125f815ad450280b0f6fc5e26889518b7060"
+        );
+        assert_eq!(FORGE_NATIVE_UI_SIZE, 10_213_978);
         assert_eq!(
             FORGE_LWJGL_MACOS_COMPAT_SHA1,
-            "1798902532ab2bf3ee72b3011426823f17b7a1c8"
+            "397a083e0208317aa6f598a3ece58e706d7a75f9"
         );
-        assert_eq!(FORGE_LWJGL_MACOS_COMPAT_SIZE, 1_200_327);
+        assert_eq!(FORGE_LWJGL_MACOS_COMPAT_SIZE, 1_202_775);
         assert_eq!(
             FORGE_LWJGL_RESIZE_GUARD_SHA1,
-            "b80da68bc3de6c8823bcfdee42d660a90246a09f"
+            "6005c797463267ed1089231d3b6fb88f3bc0b0fd"
         );
     }
 }

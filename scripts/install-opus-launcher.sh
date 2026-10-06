@@ -3,7 +3,7 @@ set -euo pipefail
 
 opus_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 opus_guard="${opus_root}/scripts/opus-process-guard.sh"
-opus_bundle="${opus_root}/target/release/bundle/macos/Opus Launcher.app"
+opus_bundle="${1:-${opus_root}/target/release/bundle/macos/Opus Launcher.app}"
 opus_destination='/Applications/Opus Launcher.app'
 file_only_root="$(cd "${opus_root}/.." && pwd)"
 
@@ -14,7 +14,6 @@ if [[ -x "${file_only_root}/tools/no-keychain/check-console-unlocked.sh" ]] \
   exit 78
 fi
 
-"${opus_guard}" assert-idle
 test -f "${opus_bundle}/Contents/MacOS/opus-launcher"
 test -f "${opus_bundle}/Contents/Info.plist"
 "${opus_root}/scripts/assert-file-only-bundle.sh" "${opus_bundle}"
@@ -41,13 +40,26 @@ fi
 codesign --force --deep --sign - "${opus_stage}/Opus Launcher.app"
 codesign --verify --deep --strict "${opus_stage}/Opus Launcher.app"
 
+# Validate the complete replacement before touching the running installation.
+"${opus_guard}" stop-installed
+"${opus_guard}" assert-installed-idle
+
 if [[ -d "${opus_destination}" ]]; then
-  opus_trash="${HOME}/.Trash/Opus Launcher.app.$(date +%Y%m%d-%H%M%S)"
-  mv "${opus_destination}" "${opus_trash}"
-  echo "Previous Opus Launcher moved to: ${opus_trash}"
+  opus_backup_dir="$(mktemp -d "${HOME}/.Trash/Opus Launcher backup.XXXXXX")"
+  mv "${opus_destination}" "${opus_backup_dir}/Opus Launcher.app"
 fi
 
-mv "${opus_stage}/Opus Launcher.app" "${opus_destination}"
+if ! mv "${opus_stage}/Opus Launcher.app" "${opus_destination}"; then
+  if [[ -n "${opus_backup_dir:-}" ]]; then
+    mv "${opus_backup_dir}/Opus Launcher.app" "${opus_destination}"
+    rmdir "${opus_backup_dir}"
+  fi
+  echo "Install failed; previous Opus Launcher was restored." >&2
+  exit 1
+fi
 rmdir "${opus_stage}"
 trap - EXIT
+if [[ -n "${opus_backup_dir:-}" ]]; then
+  echo "Previous Opus Launcher moved to: ${opus_backup_dir}/Opus Launcher.app"
+fi
 echo "Installed: ${opus_destination}"

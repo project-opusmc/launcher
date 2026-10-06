@@ -1,5 +1,6 @@
 mod download;
 mod forge;
+mod game_settings;
 mod install;
 mod launch;
 mod layout;
@@ -12,10 +13,11 @@ pub use download::{DownloadOutcome, DownloadSpec, Downloader, verify_file};
 pub use forge::{
     FORGE_COREMOD_SHA1, FORGE_COREMOD_SIZE, FORGE_LWJGL_MACOS_COMPAT_SHA1,
     FORGE_LWJGL_MACOS_COMPAT_SIZE, FORGE_LWJGL_MACOS_NATIVE_SHA1, FORGE_LWJGL_MACOS_NATIVE_SIZE,
-    FORGE_LWJGL_RESIZE_GUARD_FILE_NAME, FORGE_LWJGL_RESIZE_GUARD_SHA1,
-    FORGE_LWJGL_RESIZE_GUARD_SIZE, FORGE_MAIN_CLASS, FORGE_NATIVE_UI_SHA1, FORGE_NATIVE_UI_SIZE,
-    FORGE_OPTIFINE_FILE_NAME, FORGE_PROFILE_ID, FORGE_RUNTIME_ID, ForgeLibrary, ForgeLockError,
-    ForgeRuntimeLock, OptiFineLock,
+    FORGE_LWJGL_RESIZE_GUARD_FILE_NAME, FORGE_LWJGL_RESIZE_GUARD_MARKER,
+    FORGE_LWJGL_RESIZE_GUARD_SHA1, FORGE_LWJGL_RESIZE_GUARD_SIZE, FORGE_MAIN_CLASS,
+    FORGE_NATIVE_UI_SHA1, FORGE_NATIVE_UI_SIZE, FORGE_OPTIFINE_FILE_NAME, FORGE_PROFILE_ID,
+    FORGE_RUNTIME_ID, ForgeLibrary, ForgeLockError, ForgeRuntimeLock, OptiFineLock,
+    STANDALONE_LOADER_SHA1, STANDALONE_LOADER_SIZE,
 };
 pub use install::{
     InstallPhase, InstallProgress, InstallReport, InstalledMinecraft, Installer, ManagedJava,

@@ -45,6 +45,20 @@ const expected = {
       ).replaceAll("_", ""),
     ),
   },
+  standaloneLoader: {
+    sha1: readConstant(
+      forge,
+      "STANDALONE_LOADER_SHA1",
+      /STANDALONE_LOADER_SHA1:\s*&str\s*=\s*"([0-9a-f]{40})"/,
+    ),
+    size: Number(
+      readConstant(
+        forge,
+        "STANDALONE_LOADER_SIZE",
+        /STANDALONE_LOADER_SIZE:\s*u64\s*=\s*([0-9_]+)/,
+      ).replaceAll("_", ""),
+    ),
+  },
   nativeUi: {
     sha1: readConstant(
       forge,
@@ -96,6 +110,11 @@ const expected = {
         /FORGE_LWJGL_RESIZE_GUARD_SIZE:\s*u64\s*=\s*([0-9_]+)/,
       ).replaceAll("_", ""),
     ),
+    guardMarker: readConstant(
+      forge,
+      "FORGE_LWJGL_RESIZE_GUARD_MARKER",
+      /FORGE_LWJGL_RESIZE_GUARD_MARKER:\s*&str\s*=\s*\n?\s*"([A-Z0-9_]+)"/,
+    ),
   },
 };
 
@@ -110,7 +129,7 @@ if (
   manifest.protocolVersion !== 1 ||
   manifest.minecraftVersion !== "1.8.9" ||
   !Array.isArray(manifest.artifacts) ||
-  manifest.artifacts.length !== 4 ||
+  manifest.artifacts.length !== 5 ||
   checksums.schemaVersion !== 1 ||
   checksums.algorithm !== "SHA-256" ||
   checksums.files === null ||
@@ -129,6 +148,7 @@ for (const artifact of manifest.artifacts) {
 
 const required = [
   ["runtime-legacy-1.8.9", "coremod", "opus-runtime-legacy-1.8.9-", null],
+  ["standalone-loader", "standaloneLoader", "opus-standalone-loader-", null],
   [
     "lwjgl-macos-compat",
     "lwjglMacosCompat",
@@ -227,9 +247,7 @@ for (const [role, contract, namePrefix, exactName] of required) {
       guard.length !== expected[contract].guardSize ||
       guardSha1 !== expected[contract].guardSha1 ||
       !guardIsMachO ||
-      !guard
-        .toString("latin1")
-        .includes("OPUS_COCOA_LIVE_RESIZE_GUARD_V10_MAIN_QUEUE_INSTALL")
+      !guard.toString("latin1").includes(expected[contract].guardMarker)
     ) {
       throw new Error(
         `Embedded Cocoa live-resize guard integrity mismatch: ${artifact.file}`,
@@ -253,5 +271,5 @@ if (!statSync(bootstrapPath).isFile()) {
 }
 
 console.log(
-  "Runtime launch contract verified: Core Mod + LWJGL macOS compatibility + Web Surface V2 client",
+  "Runtime launch contract verified: Core Mod + Standalone Loader + LWJGL macOS compatibility + Web Surface V2 client",
 );

@@ -40,4 +40,18 @@ if [[ -z "${bundle}" ]]; then
   exit 1
 fi
 
+# Tauri signs its executable before the staged CEF/resources tree is finalized.
+# Re-seal the complete local development bundle so the artifact that passes the
+# release gate is also the exact app that can be installed into /Applications.
+if [[ "$(uname -s)" == "Darwin" ]]; then
+  /usr/bin/codesign --force --deep --sign - "${bundle}"
+  /usr/bin/codesign --verify --deep --strict "${bundle}"
+fi
+
 "${opus_root}/scripts/assert-file-only-bundle.sh" "${bundle}"
+
+# Local release builds install the verified app automatically. CI and callers
+# that only want a bundle can opt out without changing the default workflow.
+if [[ "$(uname -s)" == "Darwin" && "${CI:-}" != "true" && "${OPUS_AUTO_INSTALL:-1}" == "1" ]]; then
+  "${opus_root}/scripts/install-opus-launcher.sh" "${bundle}"
+fi

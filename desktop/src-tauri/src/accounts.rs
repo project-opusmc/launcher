@@ -416,6 +416,44 @@ mod tests {
     }
 
     #[test]
+    fn offline_username_case_survives_save_load_and_selection() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = OpusPaths::from_root(directory.path().join("opus")).unwrap();
+        let names = ["zvwgvx", "Zvwgvx", "zVwGvX", "ZVWGVX", "player_01"];
+        let mut saved = Vec::new();
+        for name in names {
+            let account = upsert_offline(&paths, name).unwrap();
+            assert_eq!(account.username, name);
+            assert_eq!(
+                account.uuid,
+                Some(GameIdentity::offline(name).unwrap().uuid)
+            );
+            saved.push(account);
+        }
+
+        let loaded = load(&paths).unwrap().summaries();
+        assert_eq!(loaded.len(), names.len());
+        for ((account, original), name) in loaded.iter().zip(&saved).zip(names) {
+            assert_eq!(account.username, name);
+            assert_eq!(account.id, original.id);
+            assert_eq!(account.uuid, original.uuid);
+            let selected = select(&paths, &account.id).unwrap();
+            assert_eq!(selected.username, name);
+            assert_eq!(
+                selected_id(&load(&paths).unwrap()),
+                Some(account.id.clone())
+            );
+        }
+        let distinct_ids: std::collections::HashSet<_> =
+            saved.iter().map(|account| &account.id).collect();
+        assert_eq!(
+            distinct_ids.len(),
+            names.len(),
+            "case variants must not be merged"
+        );
+    }
+
+    #[test]
     fn offline_profiles_persist_in_one_selected_catalog() {
         let directory = tempfile::tempdir().unwrap();
         let paths = OpusPaths::from_root(directory.path().join("opus")).unwrap();

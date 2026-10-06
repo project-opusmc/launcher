@@ -364,11 +364,21 @@ impl DeveloperTestProfile {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+enum LaunchProfileType {
+    Standalone,
+    #[default]
+    Forge,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct LauncherSettings {
     max_memory_mib: u32,
     close_launcher_on_game_start: bool,
+    #[serde(default)]
+    launch_profile_type: LaunchProfileType,
 }
 
 impl Default for LauncherSettings {
@@ -376,6 +386,7 @@ impl Default for LauncherSettings {
         Self {
             max_memory_mib: 2048,
             close_launcher_on_game_start: false,
+            launch_profile_type: LaunchProfileType::Standalone,
         }
     }
 }
@@ -391,6 +402,8 @@ struct UtilityPreference {
     offset: String,
     scale: u8,
     opacity: u8,
+    #[serde(default, flatten)]
+    extra: BTreeMap<String, serde_json::Value>,
 }
 
 /// A map keeps the IPC shape stable for the frontend while allowing additional
@@ -402,6 +415,8 @@ struct UtilitySettings {
     #[serde(default)]
     schema_version: u8,
     utilities: BTreeMap<String, UtilityPreference>,
+    #[serde(default, flatten)]
+    extra: BTreeMap<String, serde_json::Value>,
 }
 
 impl Default for UtilitySettings {
@@ -418,6 +433,7 @@ impl Default for UtilitySettings {
                 offset: "12 · 12".to_owned(),
                 scale: 100,
                 opacity: 100,
+                extra: BTreeMap::new(),
             },
         );
         utilities.insert(
@@ -428,6 +444,7 @@ impl Default for UtilitySettings {
                 offset: "12 · 26".to_owned(),
                 scale: 100,
                 opacity: 100,
+                extra: BTreeMap::new(),
             },
         );
         utilities.insert(
@@ -438,6 +455,7 @@ impl Default for UtilitySettings {
                 offset: "12 · 12".to_owned(),
                 scale: 100,
                 opacity: 100,
+                extra: BTreeMap::new(),
             },
         );
         utilities.insert(
@@ -448,6 +466,7 @@ impl Default for UtilitySettings {
                 offset: "12 · 28".to_owned(),
                 scale: 100,
                 opacity: 100,
+                extra: BTreeMap::new(),
             },
         );
         utilities.insert(
@@ -458,6 +477,7 @@ impl Default for UtilitySettings {
                 offset: "12 · 26".to_owned(),
                 scale: 100,
                 opacity: 100,
+                extra: BTreeMap::new(),
             },
         );
         utilities.insert(
@@ -468,11 +488,13 @@ impl Default for UtilitySettings {
                 offset: "12 · 28".to_owned(),
                 scale: 100,
                 opacity: 100,
+                extra: BTreeMap::new(),
             },
         );
         Self {
             schema_version: UTILITY_SETTINGS_SCHEMA_VERSION,
             utilities,
+            extra: BTreeMap::new(),
         }
     }
 }
@@ -575,6 +597,7 @@ struct PreparedGameLaunch {
 struct ForgeBootstrapArtifacts {
     bootstrap_jar: PathBuf,
     coremod_jar: PathBuf,
+    standalone_loader_jar: Option<PathBuf>,
     ui: ForgeUiArtifacts,
 }
 
@@ -1197,9 +1220,6 @@ fn normalize_utility_settings(
         settings.utilities.insert("fps".to_owned(), previous);
     }
     let defaults = UtilitySettings::default();
-    settings
-        .utilities
-        .retain(|utility_id, _| defaults.utilities.contains_key(utility_id));
     for (utility_id, preference) in defaults.utilities {
         settings.utilities.entry(utility_id).or_insert(preference);
     }
@@ -1372,6 +1392,23 @@ fn prepare_game_launch(
         OperatingSystem::MacOs => Some(macos_game_app_path(app)?),
         OperatingSystem::Windows | OperatingSystem::Linux => None,
     };
+    let launch_mode = match settings.launch_profile_type {
+        LaunchProfileType::Standalone => {
+            let loader_jar = forge_artifacts.standalone_loader_jar.ok_or_else(|| {
+                "Opus standalone loader JAR is missing. Reinstall Opus Launcher.".to_owned()
+            })?;
+            LaunchMode::Standalone {
+                bootstrap_jar: forge_artifacts.bootstrap_jar,
+                loader_jar,
+                ui: forge_artifacts.ui,
+            }
+        }
+        LaunchProfileType::Forge => LaunchMode::ForgeBootstrap {
+            bootstrap_jar: forge_artifacts.bootstrap_jar,
+            coremod_jar: forge_artifacts.coremod_jar,
+            ui: forge_artifacts.ui,
+        },
+    };
     let plan = LaunchPlan::build(
         &layout,
         platform,
@@ -1382,11 +1419,7 @@ fn prepare_game_launch(
             max_memory_mib: settings.max_memory_mib,
             ..LaunchOptions::default()
         },
-        &LaunchMode::ForgeBootstrap {
-            bootstrap_jar: forge_artifacts.bootstrap_jar,
-            coremod_jar: forge_artifacts.coremod_jar,
-            ui: forge_artifacts.ui,
-        },
+        &launch_mode,
     )
     .map_err(display_error)?;
 
@@ -1543,6 +1576,7 @@ fn forge_bootstrap_artifacts(directory: &Path) -> Result<ForgeBootstrapArtifacts
 
     let mut bootstrap_jar = None;
     let mut coremod_jar = None;
+    let mut standalone_loader_jar = None;
     let mut native_ui_jar = None;
     let mut webview_helper_app = None;
     let mut lwjgl_macos_compat_jar = None;
@@ -1585,6 +1619,12 @@ fn forge_bootstrap_artifacts(directory: &Path) -> Result<ForgeBootstrapArtifacts
                     "Opus bootstrap directory contains multiple Forge coremod JARs".to_owned(),
                 );
             }
+        } else if name.starts_with("opus-standalone-loader-") && name.ends_with(".jar") {
+            if standalone_loader_jar.replace(path).is_some() {
+                return Err(
+                    "Opus bootstrap directory contains multiple standalone loader JARs".to_owned(),
+                );
+            }
         } else if name == "opus-native-ui-1.8.9-0.1.0.jar" {
             if native_ui_jar.replace(path).is_some() {
                 return Err(
@@ -1611,6 +1651,7 @@ fn forge_bootstrap_artifacts(directory: &Path) -> Result<ForgeBootstrapArtifacts
         coremod_jar: coremod_jar.ok_or_else(|| {
             "Opus Forge coremod JAR is missing. Reinstall Opus Launcher.".to_owned()
         })?,
+        standalone_loader_jar,
         ui: ForgeUiArtifacts {
             native_ui_jar: native_ui_jar.ok_or_else(|| {
                 "Opus Web Surface client JAR is missing. Reinstall Opus Launcher.".to_owned()
@@ -1714,6 +1755,7 @@ mod tests {
             validate_settings(&LauncherSettings {
                 max_memory_mib: 511,
                 close_launcher_on_game_start: false,
+                launch_profile_type: LaunchProfileType::Standalone,
             })
             .is_err()
         );
@@ -1725,19 +1767,39 @@ mod tests {
             validate_settings(&LauncherSettings {
                 max_memory_mib: 4096,
                 close_launcher_on_game_start: true,
+                launch_profile_type: LaunchProfileType::Standalone,
             })
             .is_ok()
         );
     }
 
     #[test]
-    fn settings_ignore_unknown_fields() {
+    fn settings_ignore_unknown_fields_and_defaults_profile_to_forge() {
         let settings: LauncherSettings = serde_json::from_str(
             r#"{"maxMemoryMib":2048,"closeLauncherOnGameStart":false,"unknownField":"ignored"}"#,
         )
         .unwrap();
         assert_eq!(settings.max_memory_mib, 2048);
         assert!(!settings.close_launcher_on_game_start);
+        assert_eq!(settings.launch_profile_type, LaunchProfileType::Forge);
+    }
+
+    #[test]
+    fn settings_parses_forge_and_standalone_profiles() {
+        let forge_settings: LauncherSettings = serde_json::from_str(
+            r#"{"maxMemoryMib":3072,"closeLauncherOnGameStart":true,"launchProfileType":"forge"}"#,
+        )
+        .unwrap();
+        assert_eq!(forge_settings.launch_profile_type, LaunchProfileType::Forge);
+
+        let standalone_settings: LauncherSettings = serde_json::from_str(
+            r#"{"maxMemoryMib":3072,"closeLauncherOnGameStart":true,"launchProfileType":"standalone"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            standalone_settings.launch_profile_type,
+            LaunchProfileType::Standalone
+        );
     }
 
     #[test]
@@ -1832,6 +1894,29 @@ mod tests {
         );
         assert_eq!(preference.get("scale"), Some(&serde_json::json!(100)));
         assert_eq!(preference.get("opacity"), Some(&serde_json::json!(100)));
+    }
+
+    #[test]
+    fn launcher_preserves_client_hud_options_and_other_module_preferences() {
+        let input = serde_json::json!({
+            "schemaVersion": 1, "ownerNote": "preserve",
+            "utilities": {
+                "fps": {"enabled":true,"anchor":"top-left","offset":"21 · 32","scale":125,"opacity":90},
+                "keystrokes": {"enabled":true,"anchor":"top-left","offset":"12 · 50","scale":110,"opacity":100,
+                    "showJump":false,"showMouseButtons":false},
+                "armor-status": {"enabled":true,"anchor":"top-right","offset":"14 · 16","scale":100,"opacity":100,
+                    "showDurability":false}
+            }
+        });
+        let parsed: UtilitySettings = serde_json::from_value(input).unwrap();
+        let (normalized, _) = normalize_utility_settings(parsed).unwrap();
+        let output = serde_json::to_value(normalized).unwrap();
+        assert_eq!(output["utilities"]["keystrokes"]["showJump"], false);
+        assert_eq!(output["utilities"]["keystrokes"]["showMouseButtons"], false);
+        assert_eq!(output["utilities"]["armor-status"]["enabled"], true);
+        assert_eq!(output["utilities"]["armor-status"]["showDurability"], false);
+        assert_eq!(output["utilities"]["fps"]["scale"], 125);
+        assert_eq!(output["ownerNote"], "preserve");
     }
 
     #[test]

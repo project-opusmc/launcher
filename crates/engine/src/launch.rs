@@ -1,10 +1,10 @@
 use crate::{
     FORGE_COREMOD_SHA1, FORGE_COREMOD_SIZE, FORGE_LWJGL_MACOS_COMPAT_SHA1,
     FORGE_LWJGL_MACOS_COMPAT_SIZE, FORGE_LWJGL_MACOS_NATIVE_SHA1, FORGE_LWJGL_MACOS_NATIVE_SIZE,
-    FORGE_LWJGL_RESIZE_GUARD_FILE_NAME, FORGE_LWJGL_RESIZE_GUARD_SHA1,
-    FORGE_LWJGL_RESIZE_GUARD_SIZE, FORGE_NATIVE_UI_SHA1, FORGE_NATIVE_UI_SIZE, FORGE_RUNTIME_ID,
-    ForgeRuntimeLock, InstalledMinecraft, ManagedJava, MinecraftLayout, extract_natives,
-    replace_native_from_archive, verify_file,
+    FORGE_LWJGL_RESIZE_GUARD_FILE_NAME, FORGE_LWJGL_RESIZE_GUARD_MARKER,
+    FORGE_LWJGL_RESIZE_GUARD_SHA1, FORGE_LWJGL_RESIZE_GUARD_SIZE, FORGE_NATIVE_UI_SHA1,
+    FORGE_NATIVE_UI_SIZE, FORGE_RUNTIME_ID, ForgeRuntimeLock, InstalledMinecraft, ManagedJava,
+    MinecraftLayout, extract_natives, replace_native_from_archive, verify_file,
 };
 #[cfg(feature = "opus-owned-m3-preview")]
 use base64::Engine;
@@ -192,6 +192,13 @@ pub enum LaunchMode {
         coremod_jar: PathBuf,
         ui: ForgeUiArtifacts,
     },
+    /// Standalone OpusLoader: Launches vanilla 1.8.9 + LaunchWrapper with
+    /// OpusTweaker, completely bypassing Forge and FML mod lifecycle.
+    Standalone {
+        bootstrap_jar: PathBuf,
+        loader_jar: PathBuf,
+        ui: ForgeUiArtifacts,
+    },
     /// An explicit, source-controlled M3 preview target. This does not alter
     /// the normal Forge release lane or its locked artifact contract.
     #[cfg(feature = "opus-owned-m3-preview")]
@@ -354,6 +361,12 @@ impl LaunchPlan {
             mode,
         } = request;
         validate_memory(options)?;
+        if matches!(
+            mode,
+            LaunchMode::ForgeBootstrap { .. } | LaunchMode::Standalone { .. }
+        ) {
+            crate::game_settings::validate_game_directory(&layout.paths.game)?;
+        }
         let session_id = new_session_id()?;
         let session_directory = layout.paths.sessions.join(&session_id);
         let natives_directory = session_directory.join("natives");
@@ -389,6 +402,10 @@ impl LaunchPlan {
         jvm_arguments.extend([
             OsString::from(format!("-Xms{}M", options.min_memory_mib)),
             OsString::from(format!("-Xmx{}M", options.max_memory_mib)),
+            OsString::from("-XX:+UseG1GC"),
+            OsString::from("-XX:+ParallelRefProcEnabled"),
+            OsString::from("-XX:MaxGCPauseMillis=10"),
+            OsString::from("-XX:+UnlockExperimentalVMOptions"),
             prefixed_path_argument("-Djava.library.path=", &natives_directory),
             prefixed_path_argument("-Dorg.lwjgl.librarypath=", &natives_directory),
             prefixed_path_argument("-Dnet.java.games.input.librarypath=", &natives_directory),
@@ -398,7 +415,10 @@ impl LaunchPlan {
             OsString::from("-XX:+PrintGCDateStamps"),
             prefixed_path_argument("-XX:ErrorFile=", &log_directory.join("jvm_crash_%p.log")),
         ]);
-        if matches!(mode, LaunchMode::ForgeBootstrap { .. }) {
+        if matches!(
+            mode,
+            LaunchMode::ForgeBootstrap { .. } | LaunchMode::Standalone { .. }
+        ) {
             jvm_arguments.extend([
                 OsString::from(format!("-Dopus.native.ui.session={session_id}")),
                 OsString::from("-Dopus.native.ui.enabled=true"),
@@ -408,25 +428,40 @@ impl LaunchPlan {
                     "-Dopus.control.file=",
                     &session_directory.join("control.json"),
                 ),
+                prefixed_path_argument(
+                    "-Dopus.accounts.file=",
+                    &layout.paths.root.join("accounts-v1.json"),
+                ),
             ]);
         }
+        if matches!(mode, LaunchMode::Standalone { .. }) {
+            jvm_arguments.push(OsString::from("-Dopus.standalone=true"));
+        }
         let webview_helper_app = match mode {
-            LaunchMode::ForgeBootstrap { ui, .. } => Some(&ui.webview_helper_app),
+            LaunchMode::ForgeBootstrap { ui, .. } | LaunchMode::Standalone { ui, .. } => {
+                Some(&ui.webview_helper_app)
+            }
             #[cfg(feature = "opus-owned-m3-preview")]
             LaunchMode::OpusOwnedM3Preview { .. } => None,
         };
-        if platform.os == OperatingSystem::MacOs {
-            if let Some(helper) = webview_helper_app {
-                let helper = stage_macos_webview_helper(layout, helper)?;
-                jvm_arguments.push(prefixed_path_argument("-Dopus.webview.helper=", &helper));
-            }
+        if platform.os == OperatingSystem::MacOs
+            && let Some(helper) = webview_helper_app
+        {
+            let helper = stage_macos_webview_helper(layout, helper)?;
+            jvm_arguments.push(prefixed_path_argument("-Dopus.webview.helper=", &helper));
         }
-        if let Some(utility_settings_file) = &options.utility_settings_file {
-            jvm_arguments.push(prefixed_path_argument(
-                "-Dopus.utility.settings.file=",
-                utility_settings_file,
-            ));
-        }
+        // Desktop and CLI normally use default LaunchOptions. The native HUD
+        // must still share the launcher's preferences, not lose persistence.
+        // Resolve the same root as accounts; never create/reset preferences here.
+        let default_utility_settings = layout.paths.root.join("utility-settings-v1.json");
+        let utility_settings_file = options
+            .utility_settings_file
+            .as_ref()
+            .unwrap_or(&default_utility_settings);
+        jvm_arguments.push(prefixed_path_argument(
+            "-Dopus.utility.settings.file=",
+            utility_settings_file,
+        ));
         if let Some(brand_wordmark_file) = &options.brand_wordmark_file {
             jvm_arguments.push(prefixed_path_argument(
                 "-Dopus.brand.wordmark.file=",
@@ -457,8 +492,38 @@ impl LaunchPlan {
             ]);
         }
 
+        if matches!(mode, LaunchMode::Standalone { .. }) {
+            let mut filtered = Vec::new();
+            let mut skip_next = false;
+            for arg in vanilla_arguments {
+                if skip_next {
+                    skip_next = false;
+                    continue;
+                }
+                if arg == "--tweakClass" {
+                    skip_next = true;
+                    continue;
+                }
+                filtered.push(arg);
+            }
+            vanilla_arguments = filtered;
+            if minecraft.optifine_jar.is_some() {
+                vanilla_arguments.extend([
+                    OsString::from("--tweakClass"),
+                    OsString::from("optifine.OptiFineTweaker"),
+                ]);
+            }
+            vanilla_arguments.extend([
+                OsString::from("--tweakClass"),
+                OsString::from("org.polydevs.opusmc.standalone.OpusTweaker"),
+            ]);
+        }
+
         let (bootstrap_jar, lwjgl_macos_compat_jar) = match mode {
             LaunchMode::ForgeBootstrap {
+                bootstrap_jar, ui, ..
+            }
+            | LaunchMode::Standalone {
                 bootstrap_jar, ui, ..
             } => (bootstrap_jar, &ui.lwjgl_macos_compat_jar),
             #[cfg(feature = "opus-owned-m3-preview")]
@@ -470,7 +535,7 @@ impl LaunchPlan {
         };
         #[cfg(feature = "opus-owned-m3-preview")]
         let owned_m3_preview = match mode {
-            LaunchMode::ForgeBootstrap { .. } => None,
+            LaunchMode::ForgeBootstrap { .. } | LaunchMode::Standalone { .. } => None,
             LaunchMode::OpusOwnedM3Preview { preview, .. } => Some(preview),
         };
         let pinned_contract = if forge_contract.is_none() {
@@ -513,6 +578,16 @@ impl LaunchPlan {
                     ],
                 )?;
             }
+            LaunchMode::Standalone { loader_jar, ui, .. } => {
+                validate_standalone_loader(loader_jar)?;
+                stage_forge_ui_artifact(
+                    layout,
+                    &ui.native_ui_jar,
+                    &contract.native_ui,
+                    "opus-native-ui-1.8.9-0.1.0.jar",
+                )?;
+                remove_retired_forge_ui_mods(layout)?;
+            }
             #[cfg(feature = "opus-owned-m3-preview")]
             LaunchMode::OpusOwnedM3Preview { .. } => {
                 prepare_opus_owned_m3_preview_mods(layout)?;
@@ -551,6 +626,15 @@ impl LaunchPlan {
             // before the verified compatibility layer can own the loader path.
             game_classpath.retain(|entry| !is_pinned_lwjgl_macos_java_artifact(entry));
         }
+        if matches!(mode, LaunchMode::Standalone { .. }) {
+            game_classpath.retain(|entry| {
+                let name = entry
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or_default();
+                !name.starts_with("forge-1.8.9")
+            });
+        }
         let mut system_classpath = Vec::with_capacity(game_classpath.len() + 3);
         #[cfg(feature = "opus-owned-m3-preview")]
         let owned_m3_control = owned_m3_preview
@@ -576,6 +660,13 @@ impl LaunchPlan {
             jvm_arguments.push(OsString::from("-Dopus.lwjgl.macos.compat=true"));
             system_classpath.push(compatibility_jar);
         }
+        if let LaunchMode::Standalone { loader_jar, ui, .. } = mode {
+            system_classpath.push(loader_jar.clone());
+            system_classpath.push(ui.native_ui_jar.clone());
+            if let Some(optifine) = &minecraft.optifine_jar {
+                system_classpath.push(optifine.clone());
+            }
+        }
         system_classpath.extend(game_classpath);
         let game_arguments = vec![OsString::from("--opus-game-arguments-stdin")];
         let stdin_payload = Some(encode_game_arguments(&vanilla_arguments)?);
@@ -591,6 +682,13 @@ impl LaunchPlan {
             .map_err(|source| LaunchError::InvalidClasspath(source.to_string()))?;
         jvm_arguments.push(OsString::from("-cp"));
         jvm_arguments.push(classpath);
+
+        if matches!(
+            mode,
+            LaunchMode::ForgeBootstrap { .. } | LaunchMode::Standalone { .. }
+        ) {
+            crate::game_settings::apply_native_defaults(&layout.paths.game)?;
+        }
 
         Ok(Self {
             java_executable: java.executable.clone(),
@@ -679,6 +777,7 @@ fn write_json_private<T: Serialize>(path: &Path, value: &T) -> Result<(), Launch
 fn launch_mode_name(mode: &LaunchMode) -> &'static str {
     match mode {
         LaunchMode::ForgeBootstrap { .. } => "forge-bootstrap",
+        LaunchMode::Standalone { .. } => "standalone",
         #[cfg(feature = "opus-owned-m3-preview")]
         LaunchMode::OpusOwnedM3Preview { .. } => "opus-owned-m3-preview",
     }
@@ -1258,8 +1357,7 @@ fn validate_forge_lwjgl_compat_artifact(
     if guard_bytes.len() as u64 != FORGE_LWJGL_RESIZE_GUARD_SIZE
         || !guard_sha1.eq_ignore_ascii_case(FORGE_LWJGL_RESIZE_GUARD_SHA1)
         || !guard_is_x86_64_mach_o
-        || !String::from_utf8_lossy(&guard_bytes)
-            .contains("OPUS_COCOA_LIVE_RESIZE_GUARD_V10_MAIN_QUEUE_INSTALL")
+        || !String::from_utf8_lossy(&guard_bytes).contains(FORGE_LWJGL_RESIZE_GUARD_MARKER)
     {
         return Err(LaunchError::InvalidLwjglMacosCompat(path.to_path_buf()));
     }
@@ -1289,6 +1387,23 @@ fn validate_forge_coremod(path: &Path, spec: &crate::DownloadSpec) -> Result<(),
         "FMLCorePlugin",
         "org.polydevs.opusmc.forge.OpusLoadingPlugin",
     ) || !manifest_has_attribute(&manifest, "FMLCorePluginContainsFMLMod", "false")
+    {
+        return Err(LaunchError::InvalidForgeCoremod(path.to_path_buf()));
+    }
+    Ok(())
+}
+
+fn validate_standalone_loader(path: &Path) -> Result<(), LaunchError> {
+    if !path.is_file() {
+        return Err(LaunchError::MissingForgeCoremod(path.to_path_buf()));
+    }
+    let spec = crate::DownloadSpec {
+        url: String::new(),
+        sha1: crate::forge::STANDALONE_LOADER_SHA1.to_owned(),
+        size: Some(crate::forge::STANDALONE_LOADER_SIZE),
+    };
+    if !verify_file(path, &spec)
+        .map_err(|_| LaunchError::InvalidForgeCoremod(path.to_path_buf()))?
     {
         return Err(LaunchError::InvalidForgeCoremod(path.to_path_buf()));
     }
@@ -2668,6 +2783,398 @@ mod tests {
                 mode,
             }
         }
+
+        fn build_plan(&self) -> Result<LaunchPlan, LaunchError> {
+            let identity = GameIdentity::offline("ForgeFixture").unwrap();
+            let mode = self.mode();
+            LaunchPlan::build_with_forge_contract(
+                self.request(&identity, &mode),
+                Some(&self.contract),
+            )
+        }
+    }
+
+    fn assert_native_settings(path: &Path, expected: &[(&str, &str)]) {
+        assert!(
+            path.is_file(),
+            "native defaults were not written before launch: {}",
+            path.display()
+        );
+        let text = fs::read_to_string(path).unwrap();
+        for (key, value) in expected {
+            let values: Vec<_> = text
+                .lines()
+                .filter_map(|line| line.split_once(':'))
+                .filter(|(name, _)| name == key)
+                .map(|(_, value)| value)
+                .collect();
+            assert_eq!(
+                values,
+                vec![*value],
+                "wrong or duplicate native setting {key}"
+            );
+        }
+    }
+
+    #[test]
+    fn default_game_launch_passes_the_shared_hud_preferences_without_rewriting_them() {
+        let fixture = ForgeFixture::new();
+        let preferences = fixture.layout.paths.root.join("utility-settings-v1.json");
+        let saved =
+            r#"{"schemaVersion":1,"utilities":{"fps":{"enabled":true,"offset":"17 · 29"}}}"#
+                .as_bytes();
+        fs::write(&preferences, saved).unwrap();
+        let plan = fixture.build_plan().unwrap();
+        let arguments: Vec<_> = plan
+            .jvm_arguments
+            .iter()
+            .filter(|argument| {
+                argument
+                    .to_string_lossy()
+                    .starts_with("-Dopus.utility.settings.file=")
+            })
+            .collect();
+        assert_eq!(
+            arguments,
+            vec![&prefixed_path_argument(
+                "-Dopus.utility.settings.file=",
+                &preferences
+            )],
+            "the installed launcher uses default LaunchOptions, so Java must receive its shared HUD file"
+        );
+        assert_eq!(
+            fs::read(&preferences).unwrap(),
+            saved,
+            "preparing a launch must not reset the player's HUD preferences"
+        );
+    }
+
+    #[test]
+    fn game_launch_respects_an_explicit_hud_preferences_override() {
+        let mut fixture = ForgeFixture::new();
+        let preferences = fixture._temporary.path().join("HUD prefs with spaces.json");
+        fixture.options.utility_settings_file = Some(preferences.clone());
+        let plan = fixture.build_plan().unwrap();
+        let arguments: Vec<_> = plan
+            .jvm_arguments
+            .iter()
+            .filter(|argument| {
+                argument
+                    .to_string_lossy()
+                    .starts_with("-Dopus.utility.settings.file=")
+            })
+            .collect();
+        assert_eq!(
+            arguments,
+            vec![&prefixed_path_argument(
+                "-Dopus.utility.settings.file=",
+                &preferences
+            )],
+            "an explicit HUD file must remain one complete JVM argument"
+        );
+        assert!(
+            !preferences.exists(),
+            "launch preparation must not invent or enable HUD widgets"
+        );
+    }
+
+    #[test]
+    fn native_defaults_prepare_quake_pro_and_the_approved_screenshot_preset() {
+        let fixture = ForgeFixture::new();
+        fixture.build_plan().unwrap();
+        assert_native_settings(
+            &fixture.layout.paths.game.join("options.txt"),
+            &[
+                ("fov", "1.0"),
+                ("maxFps", "240"),
+                ("enableVsync", "false"),
+                ("renderDistance", "8"),
+                ("fancyGraphics", "false"),
+                ("ao", "0"),
+                ("bobView", "false"),
+                ("guiScale", "3"),
+                ("useVbo", "true"),
+                ("gamma", "1.0"),
+                ("allowBlockAlternatives", "true"),
+                ("renderClouds", "false"),
+                ("entityShadows", "false"),
+                ("heldItemTooltips", "true"),
+                ("mipmapLevels", "4"),
+                ("particles", "0"),
+                ("soundCategory_music", "0.0"),
+            ],
+        );
+        assert_native_settings(
+            &fixture.layout.paths.game.join("optionsof.txt"),
+            &[
+                ("ofFastRender", "true"),
+                ("ofAoLevel", "0.0"),
+                ("ofDynamicLights", "3"),
+                ("ofDynamicFov", "false"),
+                ("ofClouds", "3"),
+                ("ofCloudsHeight", "0.0"),
+                ("ofTrees", "1"),
+                ("ofRain", "3"),
+                ("ofSky", "false"),
+                ("ofStars", "true"),
+                ("ofSunMoon", "false"),
+                ("ofShowCapes", "true"),
+                ("ofFogType", "3"),
+                ("ofFogStart", "0.6"),
+                ("ofTranslucentBlocks", "0"),
+                ("ofDroppedItems", "0"),
+                ("ofVignette", "0"),
+                ("ofAlternateBlocks", "true"),
+                ("ofSwampColors", "true"),
+                ("ofSmoothBiomes", "false"),
+                ("ofMipmapType", "0"),
+                ("ofAfLevel", "1"),
+                ("ofAaLevel", "0"),
+                ("ofClearWater", "false"),
+                ("ofRandomEntities", "false"),
+                ("ofBetterGrass", "3"),
+                ("ofBetterSnow", "false"),
+                ("ofCustomFonts", "false"),
+                ("ofCustomColors", "false"),
+                ("ofConnectedTextures", "1"),
+                ("ofNaturalTextures", "true"),
+                ("ofCustomSky", "true"),
+                ("ofCustomItems", "true"),
+                ("ofCustomEntityModels", "false"),
+                ("ofCustomGuis", "true"),
+                ("ofEmissiveTextures", "true"),
+                ("ofAnimatedWater", "2"),
+                ("ofAnimatedLava", "2"),
+                ("ofAnimatedFire", "false"),
+                ("ofAnimatedPortal", "false"),
+                ("ofAnimatedRedstone", "false"),
+                ("ofAnimatedExplosion", "false"),
+                ("ofAnimatedFlame", "false"),
+                ("ofAnimatedSmoke", "false"),
+                ("ofVoidParticles", "false"),
+                ("ofWaterParticles", "false"),
+                ("ofRainSplash", "false"),
+                ("ofPortalParticles", "false"),
+                ("ofPotionParticles", "false"),
+                ("ofDrippingWaterLava", "false"),
+                ("ofAnimatedTerrain", "false"),
+                ("ofAnimatedTextures", "false"),
+                ("ofFireworkParticles", "false"),
+                ("ofSmoothFps", "true"),
+                ("ofFastMath", "true"),
+                ("ofSmartAnimations", "true"),
+                ("ofRenderRegions", "true"),
+                ("ofChunkUpdatesDynamic", "true"),
+                ("ofLazyChunkLoading", "true"),
+            ],
+        );
+    }
+
+    #[test]
+    fn native_defaults_keep_original_backups_and_unrelated_preferences() {
+        let fixture = ForgeFixture::new();
+        let game = &fixture.layout.paths.game;
+        let vanilla = "fov:0.0\r\nrenderDistance:8\r\nkey_key.forward:17\r\nsoundCategory_master:0.7\r\nsoundCategory_records:0.4\r\nresourcePacks:[\"Gói:v1.zip\"]\r\nmouseSensitivity:0.23\r\n";
+        let optifine = "ofFastRender:false\nofChunkUpdates:3\nofAutoSaveTicks:6000\n";
+        fs::write(game.join("options.txt"), vanilla).unwrap();
+        fs::write(game.join("optionsof.txt"), optifine).unwrap();
+        fixture.build_plan().unwrap();
+        let backup = game.join(".opus-native-defaults-v1");
+        assert_eq!(
+            fs::read(backup.join("options.txt")).unwrap(),
+            vanilla.as_bytes()
+        );
+        assert_eq!(
+            fs::read(backup.join("optionsof.txt")).unwrap(),
+            optifine.as_bytes()
+        );
+        assert_native_settings(
+            &game.join("options.txt"),
+            &[
+                ("fov", "1.0"),
+                ("key_key.forward", "17"),
+                ("soundCategory_master", "0.7"),
+                ("soundCategory_records", "0.4"),
+                ("mouseSensitivity", "0.23"),
+                ("resourcePacks", "[\"Gói:v1.zip\"]"),
+            ],
+        );
+        assert_native_settings(
+            &game.join("optionsof.txt"),
+            &[
+                ("ofFastRender", "true"),
+                ("ofChunkUpdates", "3"),
+                ("ofAutoSaveTicks", "6000"),
+            ],
+        );
+    }
+
+    #[test]
+    fn native_defaults_do_not_reset_user_edits_but_mute_music_on_every_launch() {
+        let fixture = ForgeFixture::new();
+        let game = &fixture.layout.paths.game;
+        fixture.build_plan().unwrap();
+        // Deliberately edit after migration, including conflicting duplicate
+        // music rows that Minecraft would otherwise load in order.
+        fs::write(game.join("options.txt"), "fov:0.25\nrenderDistance:6\nsoundCategory_music:0.4\nsoundCategory_master:0.8\nsoundCategory_music:0.9\n").unwrap();
+        fs::write(
+            game.join("optionsof.txt"),
+            "ofFastRender:false\nofSky:true\n",
+        )
+        .unwrap();
+        fixture.build_plan().unwrap();
+        assert_native_settings(
+            &game.join("options.txt"),
+            &[
+                ("fov", "0.25"),
+                ("renderDistance", "6"),
+                ("soundCategory_music", "0.0"),
+                ("soundCategory_master", "0.8"),
+            ],
+        );
+        assert_eq!(
+            fs::read_to_string(game.join("optionsof.txt")).unwrap(),
+            "ofFastRender:false\nofSky:true\n"
+        );
+        let before = fs::read(game.join("options.txt")).unwrap();
+        fixture.build_plan().unwrap();
+        assert_eq!(fs::read(game.join("options.txt")).unwrap(), before);
+    }
+
+    #[test]
+    fn native_defaults_retry_an_interrupted_migration_without_replacing_originals() {
+        let fixture = ForgeFixture::new();
+        let game = &fixture.layout.paths.game;
+        let backup = game.join(".opus-native-defaults-v1");
+        fs::create_dir(&backup).unwrap();
+        let original_options = b"fov:0.0\nkey_key.forward:17\n";
+        let original_optifine = b"ofFastRender:false\nofChunkUpdates:3\n";
+        fs::write(backup.join("options.txt"), original_options).unwrap();
+        fs::write(backup.join("optionsof.txt"), original_optifine).unwrap();
+        fs::write(
+            backup.join("originals.json"),
+            br#"{"options_existed":true,"optifine_options_existed":true}"#,
+        )
+        .unwrap();
+        // Simulate interruption after options was replaced, but before the
+        // OptiFine file and final migration receipt were committed.
+        fs::write(game.join("options.txt"), b"fov:1.0\nkey_key.forward:17\n").unwrap();
+        fs::write(game.join("optionsof.txt"), original_optifine).unwrap();
+        fixture.build_plan().unwrap();
+        assert_native_settings(&game.join("options.txt"), &[("fov", "1.0")]);
+        assert_native_settings(&game.join("optionsof.txt"), &[("ofFastRender", "true")]);
+        assert_eq!(
+            fs::read(backup.join("options.txt")).unwrap(),
+            original_options
+        );
+        assert_eq!(
+            fs::read(backup.join("optionsof.txt")).unwrap(),
+            original_optifine
+        );
+        assert_eq!(
+            fs::read(backup.join("applied")).unwrap(),
+            b"opus-native-defaults-v1\n"
+        );
+    }
+
+    #[test]
+    fn native_defaults_validate_both_files_before_changing_either() {
+        let fixture = ForgeFixture::new();
+        let game = &fixture.layout.paths.game;
+        let options = b"fov:0.25\nsoundCategory_music:0.8\n";
+        let invalid_optifine = b"ofFastRender:\xff\n";
+        fs::write(game.join("options.txt"), options).unwrap();
+        fs::write(game.join("optionsof.txt"), invalid_optifine).unwrap();
+        assert!(fixture.build_plan().is_err());
+        assert_eq!(fs::read(game.join("options.txt")).unwrap(), options);
+        assert_eq!(
+            fs::read(game.join("optionsof.txt")).unwrap(),
+            invalid_optifine
+        );
+        let backup = game.join(".opus-native-defaults-v1");
+        assert!(!backup.join("applied").exists());
+        assert!(!backup.join("options.txt").exists());
+    }
+
+    #[test]
+    fn native_defaults_refuse_an_interrupted_migration_with_a_lost_backup() {
+        let fixture = ForgeFixture::new();
+        let game = &fixture.layout.paths.game;
+        let backup = game.join(".opus-native-defaults-v1");
+        fs::create_dir(&backup).unwrap();
+        fs::write(
+            backup.join("originals.json"),
+            br#"{"options_existed":true,"optifine_options_existed":true}"#,
+        )
+        .unwrap();
+        fs::write(backup.join("options.txt"), b"fov:0.0\n").unwrap();
+        let current_options = b"fov:1.0\nsoundCategory_music:0.5\n";
+        let current_optifine = b"ofFastRender:false\n";
+        fs::write(game.join("options.txt"), current_options).unwrap();
+        fs::write(game.join("optionsof.txt"), current_optifine).unwrap();
+        assert!(fixture.build_plan().is_err());
+        assert_eq!(fs::read(game.join("options.txt")).unwrap(), current_options);
+        assert_eq!(
+            fs::read(game.join("optionsof.txt")).unwrap(),
+            current_optifine
+        );
+        assert!(!backup.join("applied").exists());
+        assert!(!backup.join("optionsof.txt").exists());
+    }
+
+    #[test]
+    fn native_defaults_recreate_a_missing_file_without_resetting_the_other() {
+        let fixture = ForgeFixture::new();
+        let game = &fixture.layout.paths.game;
+        fixture.build_plan().unwrap();
+        let user_optifine = b"ofFastRender:false\nofSky:true\n";
+        fs::write(game.join("optionsof.txt"), user_optifine).unwrap();
+        fs::remove_file(game.join("options.txt")).unwrap();
+        fixture.build_plan().unwrap();
+        assert_native_settings(
+            &game.join("options.txt"),
+            &[("fov", "1.0"), ("soundCategory_music", "0.0")],
+        );
+        assert_eq!(fs::read(game.join("optionsof.txt")).unwrap(), user_optifine);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn native_defaults_refuse_a_symlinked_game_directory_before_staging() {
+        let fixture = ForgeFixture::new();
+        let game = &fixture.layout.paths.game;
+        let outside = fixture._temporary.path().join("another-client-game");
+        fs::rename(game, &outside).unwrap();
+        let original_options = b"fov:0.5\nsoundCategory_music:0.8\n";
+        fs::write(outside.join("options.txt"), original_options).unwrap();
+        std::os::unix::fs::symlink(&outside, game).unwrap();
+        assert!(
+            fixture.build_plan().is_err(),
+            "preset must reject a symlinked game directory before any staging"
+        );
+        assert_eq!(
+            fs::read(outside.join("options.txt")).unwrap(),
+            original_options
+        );
+        assert!(!outside.join("optionsof.txt").exists());
+        assert!(!outside.join(".opus-native-defaults-v1").exists());
+        assert_eq!(fs::read_dir(outside.join("mods")).unwrap().count(), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn native_defaults_refuse_symlinked_settings_without_touching_the_target() {
+        let fixture = ForgeFixture::new();
+        let outside = fixture._temporary.path().join("another-client-options.txt");
+        fs::write(&outside, b"fov:0.5\n").unwrap();
+        std::os::unix::fs::symlink(&outside, fixture.layout.paths.game.join("options.txt"))
+            .unwrap();
+        assert!(
+            fixture.build_plan().is_err(),
+            "preset must not follow a settings symlink"
+        );
+        assert_eq!(fs::read(&outside).unwrap(), b"fov:0.5\n");
+        assert!(!fixture.layout.paths.game.join("optionsof.txt").exists());
     }
 
     fn fixture_minecraft_version() -> crate::MinecraftVersion {
@@ -3207,6 +3714,10 @@ mod tests {
                 .join(&plan.session_id)
                 .join("control.json")
                 .display()
+        ))));
+        assert!(plan.jvm_arguments.contains(&OsString::from(format!(
+            "-Dopus.accounts.file={}",
+            fixture.layout.paths.root.join("accounts-v1.json").display()
         ))));
         assert!(
             plan.jvm_arguments
