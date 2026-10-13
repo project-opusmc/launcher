@@ -105,6 +105,7 @@ pub struct LaunchOptions {
     pub height: Option<u32>,
     pub utility_settings_file: Option<PathBuf>,
     pub brand_wordmark_file: Option<PathBuf>,
+    pub account_resolver: Option<PathBuf>,
 }
 
 impl Default for LaunchOptions {
@@ -116,6 +117,7 @@ impl Default for LaunchOptions {
             height: None,
             utility_settings_file: None,
             brand_wordmark_file: None,
+            account_resolver: None,
         }
     }
 }
@@ -433,6 +435,9 @@ impl LaunchPlan {
                     &layout.paths.root.join("accounts-v1.json"),
                 ),
             ]);
+        }
+        if let Some(resolver) = &options.account_resolver {
+            jvm_arguments.push(prefixed_path_argument("-Dopus.account.resolver=", resolver));
         }
         if matches!(mode, LaunchMode::Standalone { .. }) {
             jvm_arguments.push(OsString::from("-Dopus.standalone=true"));
@@ -1628,6 +1633,12 @@ pub fn launch_game_via_macos_app(
     let window_ready_path = plan.log_directory.join("game.window.ready");
     let window_failure_path = plan.log_directory.join("game.window.failure");
     let window_terminal_path = plan.log_directory.join("game.window.terminal");
+    let dock_icon = game_app.join("Contents/Resources/Opus.icns");
+    if dock_icon.is_file() {
+        let mut argument = OsString::from("-Xdock:icon=");
+        argument.push(dock_icon.as_os_str());
+        insert_jvm_argument_before_classpath(&mut plan.jvm_arguments, argument);
+    }
     insert_jvm_argument_before_classpath(
         &mut plan.jvm_arguments,
         OsString::from(format!("-Dopus.game.statusFile={}", status_path.display())),
@@ -1708,7 +1719,8 @@ pub fn launch_game_via_macos_app(
     let game_status = match game_status {
         Ok(game_status) => game_status,
         Err(error) => {
-            finalize_session(&plan, "game-lifecycle-failed", Some(&status), false, true);
+            // `status` belongs to LaunchServices' `open`, not the game JVM.
+            finalize_session(&plan, "game-lifecycle-failed", None, false, true);
             return Err(error);
         }
     };
@@ -1813,6 +1825,7 @@ fn wait_for_macos_game_lifecycle(status_path: &Path) -> Result<String, LaunchErr
                 ensure_macos_window_did_not_fail(log_directory)?;
                 wait_for_macos_terminal_process_exit(log_directory)?;
                 check_macos_jvm_crash_marker(log_directory)?;
+                check_macos_reported_game_crash(log_directory)?;
                 if !macos_game_window_ready(log_directory).is_file() {
                     return Err(LaunchError::MacosGameWindowNotReady);
                 }
@@ -1911,6 +1924,7 @@ fn wait_for_macos_game_exit(
                 ensure_macos_window_did_not_fail(log_directory)?;
                 wait_for_macos_terminal_process_exit(log_directory)?;
                 check_macos_jvm_crash_marker(log_directory)?;
+                check_macos_reported_game_crash(log_directory)?;
                 return Ok(game_status);
             }
             "failed" => return Err(LaunchError::MacosGameFailed),
@@ -1983,6 +1997,30 @@ fn wait_for_macos_terminal_process_exit(log_directory: &Path) -> Result<(), Laun
 fn check_macos_jvm_crash_marker(log_directory: &Path) -> Result<(), LaunchError> {
     if let Some(path) = find_macos_jvm_crash_marker(log_directory)? {
         return Err(LaunchError::MacosGameNativeCrash(path));
+    }
+    Ok(())
+}
+
+fn check_macos_reported_game_crash(log_directory: &Path) -> Result<(), LaunchError> {
+    // Minecraft can save a Java crash report and still terminate with code 0.
+    // Inspect this session's output after the recorded JVM has exited, before
+    // raw logs are redacted/removed and before accepting its terminal status.
+    for name in ["game.stdout.raw.log", "game.stdout.log"] {
+        let file = match File::open(log_directory.join(name)) {
+            Ok(file) => file,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error.into()),
+        };
+        let mut reader = BufReader::new(file);
+        let mut line = Vec::new();
+        while reader.read_until(b'\n', &mut line)? != 0 {
+            if line.starts_with(b"#@!@# Game crashed! Crash report saved to: #@!@# ") {
+                return Err(LaunchError::MacosGameReportedCrash(
+                    log_directory.join("game.stdout.log"),
+                ));
+            }
+            line.clear();
+        }
     }
     Ok(())
 }
@@ -2602,6 +2640,8 @@ pub enum LaunchError {
     MacosGameFailed,
     #[error("Minecraft native JVM crash marker was written: {0}")]
     MacosGameNativeCrash(PathBuf),
+    #[error("Minecraft reported a crash; see {0}")]
+    MacosGameReportedCrash(PathBuf),
     #[error("Minecraft status is running but its process id file is missing: {0}")]
     MacosGamePidMissing(PathBuf),
     #[error("Minecraft status is running but its process id file is invalid: {0}")]
@@ -3367,6 +3407,66 @@ mod tests {
             wait_for_macos_game_lifecycle(&status_path),
             Err(LaunchError::MacosGameNativeCrash(path)) if path == crash_path
         ));
+    }
+
+    #[test]
+    fn macos_lifecycle_rejects_a_minecraft_crash_despite_clean_process_exit() {
+        let temporary = tempfile::tempdir().unwrap();
+        let status_path = temporary.path().join("game.status");
+        fs::write(&status_path, "terminated\n").unwrap();
+        fs::write(temporary.path().join("game.window.ready"), "ready\n").unwrap();
+        fs::write(
+            temporary.path().join("game.stdout.raw.log"),
+            "#@!@# Game crashed! Crash report saved to: #@!@# /tmp/crash-client.txt\n",
+        )
+        .unwrap();
+
+        assert!(matches!(
+            wait_for_macos_game_lifecycle(&status_path),
+            Err(LaunchError::MacosGameReportedCrash(path))
+                if path == temporary.path().join("game.stdout.log")
+        ));
+        assert!(matches!(
+            wait_for_macos_game_exit(&status_path, temporary.path()),
+            Err(LaunchError::MacosGameReportedCrash(path))
+                if path == temporary.path().join("game.stdout.log")
+        ));
+    }
+
+    #[test]
+    fn macos_lifecycle_accepts_normal_shutdown_with_ordinary_error_messages() {
+        let temporary = tempfile::tempdir().unwrap();
+        let status_path = temporary.path().join("game.status");
+        fs::write(&status_path, "terminated\n").unwrap();
+        fs::write(temporary.path().join("game.window.ready"), "ready\n").unwrap();
+        fs::write(
+            temporary.path().join("game.stdout.raw.log"),
+            "[WARN] Shader unavailable\n[INFO] Stopping!\n",
+        )
+        .unwrap();
+
+        assert_eq!(
+            wait_for_macos_game_lifecycle(&status_path).unwrap(),
+            "terminated"
+        );
+    }
+
+    #[test]
+    fn macos_lifecycle_accepts_non_utf8_output_without_a_crash_marker() {
+        let temporary = tempfile::tempdir().unwrap();
+        let status_path = temporary.path().join("game.status");
+        fs::write(&status_path, "terminated\n").unwrap();
+        fs::write(temporary.path().join("game.window.ready"), "ready\n").unwrap();
+        fs::write(
+            temporary.path().join("game.stdout.raw.log"),
+            b"resource name: \xff\n",
+        )
+        .unwrap();
+
+        assert_eq!(
+            wait_for_macos_game_lifecycle(&status_path).unwrap(),
+            "terminated"
+        );
     }
 
     #[test]

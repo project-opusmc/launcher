@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode, type RefObject } from "react";
 import { AccountHeadAvatar } from "./AccountHeadAvatar";
+import { UTILITY_SCALE_MIN, UTILITY_SCALE_MAX } from "../utilitySettings";
 import "./liquid-glass.css";
 
 export type TuiPage = "home" | "installation" | "account" | "modules" | "utilities" | "settings" | "logs";
@@ -115,12 +116,6 @@ const backdropOptions: readonly { id: LauncherBackdrop; label: string; detail: s
   { id: "filament", label: "Filament", detail: "Abstract still" },
   { id: "void", label: "No media", detail: "Solid canvas" },
 ];
-const utilityAnchorLabels: Record<TuiUtilityAnchor, string> = {
-  "top-left": "Top left",
-  "top-right": "Top right",
-  "bottom-left": "Bottom left",
-  "bottom-right": "Bottom right",
-};
 const logCategories = ["Launcher", "Authentication", "Installation", "Minecraft", "Opus"] as const;
 type LogCategory = (typeof logCategories)[number];
 type StatusTone = "normal" | "muted" | "success" | "warning" | "danger";
@@ -279,7 +274,7 @@ export default function LauncherTui(props: LauncherTuiProps) {
       <header className="liquid-header">
         <div className="liquid-header__inner">
           <button type="button" className="launcher-brand" onClick={() => props.onNavigate("home")} aria-label="Open Home">
-            <img src="/brand/opus-mark-user.png" alt="" draggable={false} />
+            <img src="/brand/opus-woven-o-c3.svg" alt="" draggable={false} />
             <span><strong>Opus</strong><small>Launcher</small></span>
           </button>
           <nav className="liquid-nav" aria-label="Launcher navigation">
@@ -393,7 +388,7 @@ function HomePage(props: {
       <div className={`home-media is-${props.appearance.backdrop}`}>
         {props.appearance.backdrop === "video" ? <video ref={props.videoRef} loop muted playsInline preload="metadata"
           poster="/media/opus-night-sky-poster-v1.jpg" aria-hidden="true"><source src="/media/opus-night-sky-v1.mp4" type="video/mp4" /></video> : null}
-        <div className="home-media__identity"><img src="/brand/opus-mark-user.png" alt="" draggable={false} />
+        <div className="home-media__identity"><img src="/brand/opus-woven-o-c3.svg" alt="" draggable={false} />
           <span><strong>Opus</strong><small>Competitive intelligence client</small></span></div>
       </div>
       <div className="home-play-panel">
@@ -580,7 +575,7 @@ function UtilitiesPage(props: {
   onChange: (id: TuiUtilityId, update: Partial<TuiUtilityPreference>) => void;
 }) {
   return <section className="launcher-page" aria-labelledby="utilities-title">
-    <PageHeader id="utilities-title" eyebrow="Overlay placement" title="Utilities" description="Tune position and visibility for each existing client overlay."
+    <PageHeader id="utilities-title" eyebrow="HUD utilities" title="Utilities" description="Manage overlay visibility and appearance. Arrange overlays in the in-game HUD editor with Right Shift."
       onBack={props.onBack} aside={<SaveStatus status={props.saveStatus} />} />
     <div className="utility-grid">
       <Surface title="Utility" detail={`${props.utilities.length} available`}>
@@ -594,18 +589,14 @@ function UtilitiesPage(props: {
           <div><strong>{props.selected.name}</strong><span>{props.selected.description}</span></div>
           <SwitchControl label={`${props.preference.enabled ? "Disable" : "Enable"} ${props.selected.name}`} checked={props.preference.enabled}
             onChange={() => props.onChange(props.selected!.id, { enabled: !props.preference!.enabled })} /></div>
-          <div className="form-grid"><div className="field-control"><label htmlFor="utility-anchor">Anchor</label>
-            <select id="utility-anchor" value={props.preference.anchor} onChange={(event) => props.onChange(props.selected!.id, { anchor: event.target.value as TuiUtilityAnchor })}>
-              {(Object.entries(utilityAnchorLabels) as [TuiUtilityAnchor, string][]).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></div>
-            <div className="field-control"><label htmlFor="utility-offset">Offset</label><input id="utility-offset" type="text" maxLength={24}
-              value={props.preference.offset} onChange={(event) => props.onChange(props.selected!.id, { offset: event.target.value })} /></div>
+          <div className="form-grid">
             <div className="field-control field-control--range"><div><label htmlFor="utility-scale">Scale</label><output htmlFor="utility-scale">{props.preference.scale}%</output></div>
-              <input id="utility-scale" type="range" min={50} max={150} step={5} value={props.preference.scale}
+              <input id="utility-scale" type="range" min={UTILITY_SCALE_MIN} max={UTILITY_SCALE_MAX} step={1} value={props.preference.scale}
                 onChange={(event) => props.onChange(props.selected!.id, { scale: Number(event.target.value) })} /></div>
             <div className="field-control field-control--range"><div><label htmlFor="utility-opacity">Opacity</label><output htmlFor="utility-opacity">{props.preference.opacity}%</output></div>
               <input id="utility-opacity" type="range" min={25} max={100} step={5} value={props.preference.opacity}
                 onChange={(event) => props.onChange(props.selected!.id, { opacity: Number(event.target.value) })} /></div></div>
-        </div> : <EmptyState title="No utility selected" detail="Choose an available utility to edit its placement." />}
+        </div> : <EmptyState title="No utility selected" detail="Choose an available utility to edit its appearance." />}
       </Surface>
     </div>
   </section>;

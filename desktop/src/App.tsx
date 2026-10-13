@@ -3,7 +3,12 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { RemoveAccountDialog } from "./ui/RemoveAccountDialog";
-import { mergeUtilitySettings, type UtilitySettings } from "./utilitySettings";
+import {
+  applyUtilityPreferencePatches,
+  mergeUtilitySettings,
+  type UtilityPreferencePatches,
+  type UtilitySettings,
+} from "./utilitySettings";
 import LauncherTui, {
   type TuiAccount,
   type TuiAccountSkin,
@@ -198,7 +203,6 @@ export default function App() {
   const [snapshot, setSnapshot] = useState<TuiSnapshot | null>(null);
   const [settings, setSettings] = useState<TuiSettings>(defaultSettings);
   const [utilitySettings, setUtilitySettings] = useState<UtilitySettings>(createDefaultUtilitySettings);
-  const [utilitySettingsLoaded, setUtilitySettingsLoaded] = useState(false);
   const [utilitySaveStatus, setUtilitySaveStatus] = useState<"loading" | "saved" | "saving" | "error">("loading");
   const [busy, setBusy] = useState<string | null>(null);
   const [installProgress, setInstallProgress] = useState<TuiInstallProgress | null>(null);
@@ -217,7 +221,9 @@ export default function App() {
   const [removalPending, setRemovalPending] = useState(false);
   const [removalError, setRemovalError] = useState<string | null>(null);
   const removalInFlight = useRef(false);
-  const utilitySettingsHydrated = useRef(false);
+  const utilityPatches = useRef<UtilityPreferencePatches>({});
+  const utilitySaveTimer = useRef<number | null>(null);
+  const utilitySaveInFlight = useRef(false);
   const finishedSessions = useRef(new Set<string>());
   const knownSessions = useRef(new Set<string>());
 
@@ -227,7 +233,6 @@ export default function App() {
       setSnapshot(previewSnapshot());
       setSettings(defaultSettings);
       setUtilitySettings(createDefaultUtilitySettings());
-      setUtilitySettingsLoaded(true);
       setUtilitySaveStatus("saved");
       return true;
     }
@@ -240,7 +245,6 @@ export default function App() {
       setSnapshot(nextSnapshot);
       setSettings(nextSettings);
       setUtilitySettings(normalizeUtilitySettings(nextUtilitySettings));
-      setUtilitySettingsLoaded(true);
       setUtilitySaveStatus("saved");
       return true;
     } catch (reason) {
@@ -377,40 +381,51 @@ export default function App() {
     return () => window.clearTimeout(timer);
   }, [notice]);
 
-  useEffect(() => {
-    if (!utilitySettingsLoaded) return;
-    if (!utilitySettingsHydrated.current) {
-      utilitySettingsHydrated.current = true;
-      return;
-    }
-    setUtilitySaveStatus("saving");
-    const timer = window.setTimeout(() => {
-      if (!isTauriRuntime()) {
-        setUtilitySaveStatus("saved");
-        return;
+  const flushUtilityPatches = useCallback(async () => {
+    if (utilitySaveInFlight.current) return;
+    utilitySaveInFlight.current = true;
+    try {
+      while (Object.keys(utilityPatches.current).length > 0) {
+        const patches = utilityPatches.current;
+        utilityPatches.current = {};
+        if (!isTauriRuntime()) continue;
+        try {
+          const saved = normalizeUtilitySettings(await invoke<UtilitySettings>("save_utility_settings", { patches }));
+          setUtilitySettings(applyUtilityPreferencePatches(saved, utilityPatches.current));
+        } catch {
+          const newer = utilityPatches.current;
+          const queued: UtilityPreferencePatches = { ...patches };
+          for (const [id, patch] of Object.entries(newer) as [TuiUtilityId, Partial<TuiUtilityPreference>][]) {
+            queued[id] = { ...queued[id], ...patch };
+          }
+          utilityPatches.current = queued;
+          setUtilitySaveStatus("error");
+          return;
+        }
       }
-      invoke("save_utility_settings", { settings: utilitySettings })
-        .then(() => setUtilitySaveStatus("saved"))
-        .catch(() => setUtilitySaveStatus("error"));
-    }, 350);
-    return () => window.clearTimeout(timer);
-  }, [utilitySettings, utilitySettingsLoaded]);
+      setUtilitySaveStatus("saved");
+    } finally {
+      utilitySaveInFlight.current = false;
+    }
+  }, []);
 
-  const onUtilityPreferenceChange = useCallback(
-    (id: TuiUtilityId, update: Partial<TuiUtilityPreference>) => {
-      setUtilitySettings((prev) => ({
-        ...prev,
-        utilities: {
-          ...prev.utilities,
-          [id]: {
-            ...prev.utilities[id],
-            ...update,
-          },
-        },
-      }));
-    },
-    [],
-  );
+  useEffect(() => () => {
+    if (utilitySaveTimer.current !== null) window.clearTimeout(utilitySaveTimer.current);
+  }, []);
+
+  const onUtilityPreferenceChange = useCallback((id: TuiUtilityId, update: Partial<TuiUtilityPreference>) => {
+    utilityPatches.current = {
+      ...utilityPatches.current,
+      [id]: { ...utilityPatches.current[id], ...update },
+    };
+    setUtilitySettings((current) => applyUtilityPreferencePatches(current, { [id]: update }));
+    setUtilitySaveStatus("saving");
+    if (utilitySaveTimer.current !== null) window.clearTimeout(utilitySaveTimer.current);
+    utilitySaveTimer.current = window.setTimeout(() => {
+      utilitySaveTimer.current = null;
+      void flushUtilityPatches();
+    }, 350);
+  }, [flushUtilityPatches]);
 
   const launchMinecraft = useCallback(async (accountId: string) => {
     setBusy("launching");

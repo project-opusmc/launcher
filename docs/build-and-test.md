@@ -51,10 +51,9 @@ runtime-manifest.json
 runtime-checksums.json
 artifacts/opus-bootstrap-<version>.jar
 artifacts/opus-runtime-legacy-1.8.9-<version>.jar
+artifacts/opus-standalone-loader-<version>.jar
+artifacts/opus-lwjgl-macos-compat-2.9.2-nightly-20140822.jar
 artifacts/opus-native-ui-1.8.9-0.1.0.jar
-artifacts/opus-oneconfig-1.8.9-forge-0.2.2-alpha228-full.jar
-artifacts/opus-elementa-762.jar
-artifacts/opus-universalcraft-1.8.9-forge-516.jar
 ```
 
 Stage and verify it with:
@@ -85,9 +84,9 @@ Output on macOS:
 
 The bundle command runs `assert-file-only-bundle.sh` after Tauri creates the
 macOS app. A successful build therefore verifies the file-only credential
-contract and the exact six-JAR Runtime boundary (bootstrap, Core Mod, native UI,
-OpusConfig, Elementa, and UniversalCraft), with no retired CEF/client payload
-and the stock `Minecraft` host/Dock label.
+contract and the exact five-JAR Runtime boundary (bootstrap, Core Mod,
+Standalone Loader, LWJGL compatibility, and React/CEF client), plus the staged
+CEF helper and stock `Minecraft` host/Dock label.
 
 Install locally after building:
 

@@ -1,10 +1,28 @@
 import type { TuiUtilityId, TuiUtilityPreference } from "./ui/LauncherTui";
 
+// Match the client HUD editor's scale range, including values above 255%.
+export const UTILITY_SCALE_MIN = 50;
+export const UTILITY_SCALE_MAX = 400;
+
 export type UtilitySettings = {
   [key: string]: unknown;
   schemaVersion: number;
   utilities: Record<TuiUtilityId, TuiUtilityPreference> & Record<string, unknown>;
 };
+
+export type UtilityPreferencePatches = Partial<Record<TuiUtilityId, Partial<TuiUtilityPreference>>>;
+
+/** Keep authoritative disk fields while replaying launcher edits not saved yet. */
+export function applyUtilityPreferencePatches(
+  settings: UtilitySettings,
+  patches: UtilityPreferencePatches,
+): UtilitySettings {
+  const utilities = { ...settings.utilities };
+  for (const [id, patch] of Object.entries(patches) as [TuiUtilityId, Partial<TuiUtilityPreference>][]) {
+    utilities[id] = { ...utilities[id], ...patch };
+  }
+  return { ...settings, utilities };
+}
 
 /** Sanitize launcher controls without discarding settings owned by the client. */
 export function mergeUtilitySettings(
@@ -26,7 +44,7 @@ export function mergeUtilitySettings(
       enabled: candidate.enabled === true,
       anchor: validAnchors.includes(candidate.anchor) ? candidate.anchor : defaults.anchor,
       offset: typeof candidate.offset === "string" && candidate.offset.trim() ? candidate.offset : defaults.offset,
-      scale: Number.isInteger(candidate.scale) && candidate.scale >= 50 && candidate.scale <= 150 ? candidate.scale : defaults.scale,
+      scale: Number.isInteger(candidate.scale) && candidate.scale >= UTILITY_SCALE_MIN && candidate.scale <= UTILITY_SCALE_MAX ? candidate.scale : defaults.scale,
       opacity: Number.isInteger(candidate.opacity) && candidate.opacity >= 25 && candidate.opacity <= 100 ? candidate.opacity : defaults.opacity,
     };
   }

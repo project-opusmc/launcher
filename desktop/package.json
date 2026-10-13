@@ -7,6 +7,7 @@
     "dev": "vite --host 127.0.0.1 --port 1420 --strictPort",
     "build": "tsc -b && vite build",
     "check": "tsc --noEmit",
+    "test": "node --test tests/*.test.mjs",
     "desktop:dev": "bash ../scripts/start-desktop-dev.sh",
     "desktop:build": "bash ../scripts/build-desktop-release.sh",
     "tauri:build": "bash ../scripts/build-tauri-bundle.sh",

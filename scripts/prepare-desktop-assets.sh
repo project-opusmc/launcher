@@ -2,6 +2,7 @@
 set -euo pipefail
 
 opus_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+node "${opus_root}/scripts/prepare-desktop-brand.mjs"
 runtime_artifact_dir="${OPUS_RUNTIME_ARTIFACT_DIR:-${opus_root}/../runtime/build/runtime}"
 if [[ ! -f "${runtime_artifact_dir}/runtime-manifest.json" ]]; then
   runtime_artifact_dir="${opus_root}/runtime-artifacts"

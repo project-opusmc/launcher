@@ -1,7 +1,7 @@
 export function OpusMark({ className = "", size = 32 }: { className?: string; size?: number }) {
   return (
     <img
-      src="/brand/opus-mark-user.png"
+      src="/brand/opus-woven-o-c3.svg"
       alt="Opus Mark"
       className={className}
       width={size}
@@ -16,7 +16,7 @@ export function OpusLockup({ subtitle = "LAUNCHER" }: { subtitle?: string }) {
   return (
     <div className="opus-lockup" aria-label="OPUS LAUNCHER">
       <img
-        src="/brand/opus-mark-user.png"
+        src="/brand/opus-woven-o-c3.svg"
         alt="Opus Logo"
         className="opus-lockup__mark"
         style={{

@@ -5,6 +5,7 @@ cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 npm --prefix desktop run check
+npm --prefix desktop test
 npm --prefix desktop run build
 
 if [[ "${OPUS_CHECK_OFFICIAL:-0}" == "1" ]]; then

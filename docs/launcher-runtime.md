@@ -213,12 +213,12 @@ split with `shlex`; every `${…}` placeholder must resolve, including Forge's
 fails with `UnresolvedPlaceholder`.
 
 **Supported launch mode: `ForgeBootstrap`.** The runtime id must equal the
-locked Forge profile, the managed OptiFine JAR must verify, and all seven
+locked Forge profile, the managed OptiFine JAR must verify, and all five
 bundled Runtime artifacts must be present. The launcher:
 
 - requires exactly these schema-v1 roles: `bootstrap`,
-  `runtime-legacy-1.8.9`, `lwjgl-macos-compat`, `native-ui`, `opusconfig`,
-  `elementa`, and `universalcraft`;
+  `runtime-legacy-1.8.9`, `standalone-loader`, `lwjgl-macos-compat`, and
+  `native-ui`;
 - canonicalizes the single `bootstrap-*.jar` and all managed Forge/Minecraft
   classpath entries;
 - starts `org.polydevs.opusmc.bootstrap.ForgeBootstrapMain` rather than the vanilla main
@@ -226,16 +226,17 @@ bundled Runtime artifacts must be present. The launcher:
 - sends the ordinary game arguments through stdin; and
 - verifies the OPUS Runtime coremod checksum and required `FMLCorePlugin`
   manifest, then stages it as `game/mods/opus-runtime-legacy-1.8.9.jar`;
-- verifies and stages the LWJGL macOS compatibility JAR, native UI bridge,
-  branded OpusConfig fork, Elementa, and UniversalCraft under fixed filenames;
+- verifies and stages the LWJGL macOS compatibility JAR and standalone loader
+  on the game classpath, and the React/CEF native UI JAR in `game/mods/`;
 - removes the exact retired `game/mods/opus-client-legacy-1.8.9.jar` before
   Forge discovery; and
 - rejects an unexpected visible top-level entry in the managed `game/mods/`
   directory.
 
-The Core Mod owns bytecode/lifecycle integration. The native UI bridge owns the
-Elementa shell and physical Right Shift OpusConfig toggle. Launcher treats all
-six Runtime artifacts as immutable inputs and does not compile their source.
+The Core Mod owns bytecode and lifecycle integration. The React/CEF client
+owns the in-game product surface, while the CEF helper is a separately staged
+desktop resource. Launcher treats all five Runtime JARs as immutable inputs
+and does not compile their source.
 
 The product desktop and CLI paths do not select `Direct` or standalone
 `Bootstrap` mode. Those internal variants exist only for test boundaries; they

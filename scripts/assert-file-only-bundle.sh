@@ -16,6 +16,16 @@ if [[ ! -x "${binary}" ]]; then
   echo "file-only bundle check: missing executable: ${binary}" >&2
   exit 1
 fi
+
+launcher_icon_name="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIconFile' "${bundle_root}/Contents/Info.plist")"
+game_icon_name="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIconFile' "${game_host_info}")"
+launcher_icon="${bundle_root}/Contents/Resources/${launcher_icon_name}"
+game_icon="${bundle_root}/Contents/Resources/Minecraft.app/Contents/Resources/${game_icon_name}"
+if [[ ! -s "${launcher_icon}" || ! -s "${game_icon}" ]] \
+  || ! cmp -s "${launcher_icon}" "${game_icon}"; then
+  echo "file-only bundle check: launcher and game app must carry the same Opus icon: ${bundle_root}" >&2
+  exit 1
+fi
 if [[ "$(uname -s)" == "Darwin" ]]   && ! /usr/bin/codesign --verify --deep --strict "${bundle_root}" >/dev/null 2>&1; then
   echo "file-only bundle check: application signature is invalid: ${bundle_root}" >&2
   exit 1

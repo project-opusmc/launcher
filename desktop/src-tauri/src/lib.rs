@@ -1,3 +1,5 @@
+mod client_account_resolver;
+pub use client_account_resolver::mode as client_account_resolver_mode;
 use opus_auth::{BrowserLoginCancellation, MicrosoftAuthenticator, RefreshTokenStore};
 use opus_engine::{
     ForgeUiArtifacts, GameIdentity, InstallProgress, Installer, LaunchMode, LaunchOptions,
@@ -400,10 +402,21 @@ struct UtilityPreference {
     enabled: bool,
     anchor: String,
     offset: String,
-    scale: u8,
+    // The client HUD editor supports 400%, which does not fit in a byte.
+    scale: u16,
     opacity: u8,
     #[serde(default, flatten)]
     extra: BTreeMap<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct UtilityPreferencePatch {
+    enabled: Option<bool>,
+    anchor: Option<String>,
+    offset: Option<String>,
+    scale: Option<u16>,
+    opacity: Option<u8>,
 }
 
 /// A map keeps the IPC shape stable for the frontend while allowing additional
@@ -832,12 +845,13 @@ fn get_utility_settings() -> Result<UtilitySettings, String> {
     load_utility_settings()
 }
 
-/// Persists client-only HUD utility preferences independently from launcher
-/// settings, account data, and runtime state.
+/// Applies only fields edited in the launcher to the latest shared HUD file.
+/// The game can add or update other fields while this launcher stays open.
 #[tauri::command]
-fn save_utility_settings(settings: UtilitySettings) -> Result<(), String> {
-    validate_utility_settings(&settings)?;
-    write_utility_settings_atomic(&utility_settings_path()?, &settings)
+fn save_utility_settings(
+    patches: BTreeMap<String, UtilityPreferencePatch>,
+) -> Result<UtilitySettings, String> {
+    patch_utility_settings_at(&utility_settings_path()?, &patches)
 }
 
 #[tauri::command]
@@ -1187,16 +1201,51 @@ fn validate_settings(settings: &LauncherSettings) -> Result<(), String> {
 
 fn load_utility_settings() -> Result<UtilitySettings, String> {
     let path = utility_settings_path()?;
+    load_utility_settings_at(&path)
+}
+
+fn load_utility_settings_at(path: &Path) -> Result<UtilitySettings, String> {
     if !path.exists() {
         return Ok(UtilitySettings::default());
     }
-    let bytes = fs::read(&path).map_err(display_error)?;
+    let bytes = fs::read(path).map_err(display_error)?;
     let settings: UtilitySettings = serde_json::from_slice(&bytes)
         .map_err(|_| "Opus utility settings file is invalid".to_owned())?;
     let (settings, needs_migration) = normalize_utility_settings(settings)?;
     if needs_migration {
-        write_utility_settings_atomic(&path, &settings)?;
+        write_utility_settings_atomic(path, &settings)?;
     }
+    Ok(settings)
+}
+
+fn patch_utility_settings_at(
+    path: &Path,
+    patches: &BTreeMap<String, UtilityPreferencePatch>,
+) -> Result<UtilitySettings, String> {
+    let mut settings = load_utility_settings_at(path)?;
+    for (utility_id, patch) in patches {
+        let preference = settings
+            .utilities
+            .get_mut(utility_id)
+            .ok_or_else(|| format!("Utility {utility_id} is unavailable"))?;
+        if let Some(enabled) = patch.enabled {
+            preference.enabled = enabled;
+        }
+        if let Some(anchor) = &patch.anchor {
+            preference.anchor = anchor.clone();
+        }
+        if let Some(offset) = &patch.offset {
+            preference.offset = offset.clone();
+        }
+        if let Some(scale) = patch.scale {
+            preference.scale = scale;
+        }
+        if let Some(opacity) = patch.opacity {
+            preference.opacity = opacity;
+        }
+    }
+    validate_utility_settings(&settings)?;
+    write_utility_settings_atomic(path, &settings)?;
     Ok(settings)
 }
 
@@ -1255,9 +1304,9 @@ fn validate_utility_settings(settings: &UtilitySettings) -> Result<(), String> {
                 "Utility {utility_id} offset must be at most 64 characters"
             ));
         }
-        if !(50..=150).contains(&preference.scale) {
+        if !(50..=400).contains(&preference.scale) {
             return Err(format!(
-                "Utility {utility_id} scale must be between 50 and 150"
+                "Utility {utility_id} scale must be between 50 and 400"
             ));
         }
         if !(25..=100).contains(&preference.opacity) {
@@ -1417,6 +1466,7 @@ fn prepare_game_launch(
         &identity,
         &LaunchOptions {
             max_memory_mib: settings.max_memory_mib,
+            account_resolver: Some(std::env::current_exe().map_err(display_error)?),
             ..LaunchOptions::default()
         },
         &launch_mode,
@@ -1920,12 +1970,92 @@ mod tests {
     }
 
     #[test]
+    fn scoped_launcher_patch_preserves_newer_client_fields_and_other_utilities() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join(UTILITY_SETTINGS_FILE);
+        let baseline = UtilitySettings::default();
+        write_utility_settings_atomic(&path, &baseline).unwrap();
+
+        let mut latest = baseline.clone();
+        latest.extra.insert(
+            "ownerNote".to_owned(),
+            serde_json::json!("written after launcher hydration"),
+        );
+        let latest_fps = latest.utilities.get_mut("fps").unwrap();
+        latest_fps.scale = 225;
+        latest_fps
+            .extra
+            .insert("textColor".to_owned(), serde_json::json!("#7f123456"));
+        latest.utilities.get_mut("keystrokes").unwrap().scale = 175;
+        write_utility_settings_atomic(&path, &latest).unwrap();
+
+        let mut patches = BTreeMap::new();
+        patches.insert(
+            "fps".to_owned(),
+            UtilityPreferencePatch {
+                enabled: None,
+                anchor: None,
+                offset: None,
+                scale: None,
+                opacity: Some(75),
+            },
+        );
+        let saved = patch_utility_settings_at(&path, &patches).unwrap();
+        let persisted: UtilitySettings = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+
+        assert_eq!(saved, persisted);
+        assert_eq!(persisted.utilities["fps"].opacity, 75);
+        assert_eq!(persisted.utilities["fps"].scale, 225);
+        assert_eq!(
+            persisted.utilities["fps"].extra["textColor"],
+            serde_json::json!("#7f123456")
+        );
+        assert_eq!(persisted.utilities["keystrokes"].scale, 175);
+        assert_eq!(
+            persisted.extra["ownerNote"],
+            serde_json::json!("written after launcher hydration")
+        );
+    }
+
+    #[test]
+    fn hud_editor_scales_survive_launcher_normalization_and_disk_roundtrip() {
+        for scale in [50, 150, 154, 256, 300, 400] {
+            let mut input = serde_json::to_value(UtilitySettings::default()).unwrap();
+            input["ownerNote"] = serde_json::json!("preserve");
+            input["utilities"]["fps"]["enabled"] = serde_json::json!(true);
+            input["utilities"]["fps"]["offset"] = serde_json::json!("68 · 55");
+            input["utilities"]["fps"]["scale"] = serde_json::json!(150);
+            input["utilities"]["keystrokes"] = serde_json::json!({
+                "enabled": true, "anchor": "top-left", "offset": "651 · 89",
+                "scale": scale, "opacity": 100, "showJump": true, "showMouseButtons": true
+            });
+            let parsed: UtilitySettings = serde_json::from_value(input.clone())
+                .unwrap_or_else(|error| panic!("HUD scale {scale} must parse: {error}"));
+            let (normalized, needs_migration) = normalize_utility_settings(parsed)
+                .unwrap_or_else(|error| panic!("HUD scale {scale} must load: {error}"));
+            assert!(
+                !needs_migration,
+                "current HUD preferences must not be migrated"
+            );
+            assert_eq!(serde_json::to_value(&normalized).unwrap(), input);
+
+            let directory = tempfile::tempdir().unwrap();
+            let path = directory.path().join(UTILITY_SETTINGS_FILE);
+            write_utility_settings_atomic(&path, &normalized).unwrap();
+            let reloaded: UtilitySettings =
+                serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+            let (reloaded, _) = normalize_utility_settings(reloaded).unwrap();
+            assert_eq!(serde_json::to_value(reloaded).unwrap(), input);
+        }
+    }
+
+    #[test]
     fn utility_settings_reject_values_outside_the_supported_ranges() {
         let mut settings = UtilitySettings::default();
 
         settings.utilities.get_mut("keystrokes").unwrap().scale = 49;
         assert!(validate_utility_settings(&settings).is_err());
-        settings.utilities.get_mut("keystrokes").unwrap().scale = 151;
+        settings.utilities.get_mut("keystrokes").unwrap().scale = 401;
         assert!(validate_utility_settings(&settings).is_err());
         settings.utilities.get_mut("keystrokes").unwrap().scale = 50;
 
